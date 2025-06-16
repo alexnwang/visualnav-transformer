@@ -1,9 +1,9 @@
-name: nomad_train
+name: nomad_train2
 channels:
 - defaults
 - pytorch
 dependencies:
-- python=3.8.5
+- python=3.10.16
 - cudatoolkit=10.
 - numpy
 - matplotlib
@@ -27,6 +27,8 @@ dependencies:
   - lmdb 
   - vit-pytorch
   - positional-encodings
+  - safetensors
+  - huggingface-hub==0.25.2
 
 
 
