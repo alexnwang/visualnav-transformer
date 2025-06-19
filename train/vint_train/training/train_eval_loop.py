@@ -241,34 +241,34 @@ def train_eval_loop_nomad(
         torch.save(lr_scheduler.state_dict(), latest_scheduler_path)
 
 
-        if (epoch + 1) % eval_freq == 0: 
-            for dataset_type in test_dataloaders:
-                print(
-                    f"Start {dataset_type} ViNT DP Testing Epoch {epoch}/{current_epoch + epochs - 1}"
-                )
-                loader = test_dataloaders[dataset_type]
-                evaluate_nomad(
-                    eval_type=dataset_type,
-                    ema_model=ema_model,
-                    dataloader=loader,
-                    transform=transform,
-                    device=device,
-                    noise_scheduler=noise_scheduler,
-                    goal_mask_prob=goal_mask_prob,
-                    project_folder=project_folder,
-                    epoch=epoch,
-                    print_log_freq=print_log_freq,
-                    num_images_log=num_images_log,
-                    wandb_log_freq=wandb_log_freq,
-                    use_wandb=use_wandb,
-                    eval_fraction=eval_fraction,
-                )
+        # if (epoch + 1) % eval_freq == 0: 
+        #     for dataset_type in test_dataloaders:
+        #         print(
+        #             f"Start {dataset_type} ViNT DP Testing Epoch {epoch}/{current_epoch + epochs - 1}"
+        #         )
+        #         loader = test_dataloaders[dataset_type]
+        #         evaluate_nomad(
+        #             eval_type=dataset_type,
+        #             ema_model=ema_model,
+        #             dataloader=loader,
+        #             transform=transform,
+        #             device=device,
+        #             noise_scheduler=noise_scheduler,
+        #             goal_mask_prob=goal_mask_prob,
+        #             project_folder=project_folder,
+        #             epoch=epoch,
+        #             print_log_freq=print_log_freq,
+        #             num_images_log=num_images_log,
+        #             wandb_log_freq=wandb_log_freq,
+        #             use_wandb=use_wandb,
+        #             eval_fraction=eval_fraction,
+        #         )
         wandb.log({
             "lr": optimizer.param_groups[0]["lr"],
         }, commit=False)
 
-        if lr_scheduler is not None:
-            lr_scheduler.step()
+        # if lr_scheduler is not None:
+        #     lr_scheduler.step()
 
         # log average eval loss
         wandb.log({}, commit=False)

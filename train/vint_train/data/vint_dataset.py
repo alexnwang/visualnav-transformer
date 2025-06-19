@@ -11,12 +11,17 @@ import torch
 from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
 
+from scipy.spatial.transform import Rotation as R
+
 from vint_train.data.data_utils import (
     img_path_to_data,
     calculate_sin_cos,
     get_data_path,
     to_local_coords,
+    to_local_coords_3d
 )
+from vint_train.data.misc import XSensConstants
+from vint_train.training.nymeria_training_utils import normalize_data_smpl_pose
 
 class ViNT_Dataset(Dataset):
     def __init__(
@@ -116,7 +121,7 @@ class ViNT_Dataset(Dataset):
         self.data_config = all_data_config[self.dataset_name]
         self.trajectory_cache = {}
         self._load_index()
-        self._build_caches()
+        # self._build_caches()
         
         if self.learn_angle:
             self.num_action_params = 3
@@ -130,7 +135,7 @@ class ViNT_Dataset(Dataset):
     
     def __setstate__(self, state):
         self.__dict__ = state
-        self._build_caches()
+        # self._build_caches()
 
     def _build_caches(self, use_tqdm: bool = True):
         """
@@ -158,7 +163,7 @@ class ViNT_Dataset(Dataset):
             with lmdb.open(cache_filename, map_size=2**40) as image_cache:
                 with image_cache.begin(write=True) as txn:
                     for traj_name, time in tqdm_iterator:
-                        image_path = get_data_path(self.data_folder, traj_name, time)
+                        image_path = get_data_path(self.data_folder, traj_name, time, data_type=self.obs_type)
                         with open(image_path, "rb") as f:
                             txn.put(image_path.encode(), f.read())
 
@@ -174,7 +179,13 @@ class ViNT_Dataset(Dataset):
 
         for traj_name in tqdm.tqdm(self.traj_names, disable=not use_tqdm, dynamic_ncols=True):
             traj_data = self._get_trajectory(traj_name)
-            traj_len = len(traj_data["position"])
+            try:
+                traj_len = len(traj_data["position"])
+            except KeyError:
+                if hasattr(self, "traj_len_key"):
+                    traj_len = len(traj_data[self.traj_len_key])
+                else:
+                    raise KeyError(f"Trajectory {traj_name} does not have a 'position' key or 'traj_len_key' attribute set.")
 
             for goal_time in range(0, traj_len):
                 goals_index.append((traj_name, goal_time))
@@ -225,7 +236,8 @@ class ViNT_Dataset(Dataset):
                 pickle.dump((self.index_to_data, self.goals_index), f)
 
     def _load_image(self, trajectory_name, time):
-        image_path = get_data_path(self.data_folder, trajectory_name, time)
+        image_path = get_data_path(self.data_folder, trajectory_name, time, data_type=self.obs_type)
+        return img_path_to_data(image_path, self.image_size)
 
         try:
             with self._image_cache.begin() as txn:
@@ -324,11 +336,11 @@ class ViNT_Dataset(Dataset):
 
         # Load other trajectory data
         curr_traj_data = self._get_trajectory(f_curr)
-        curr_traj_len = len(curr_traj_data["position"])
+        curr_traj_len = len(curr_traj_data[self.traj_len_key])
         assert curr_time < curr_traj_len, f"{curr_time} and {curr_traj_len}"
 
         goal_traj_data = self._get_trajectory(f_goal)
-        goal_traj_len = len(goal_traj_data["position"])
+        goal_traj_len = len(goal_traj_data[self.traj_len_key])
         assert goal_time < goal_traj_len, f"{goal_time} an {goal_traj_len}"
 
         # Compute actions
@@ -360,3 +372,73 @@ class ViNT_Dataset(Dataset):
             torch.as_tensor(self.dataset_index, dtype=torch.int64),
             torch.as_tensor(action_mask, dtype=torch.float32),
         )
+
+class NymeriaMixin:
+    def _init_nymeria(self, full_body: bool = False):
+        if full_body:
+            self.num_segments = XSensConstants.num_parts
+        else:
+            self.num_segments = XSensConstants.upper_body_num_parts
+        
+        self._compute_actions = self._compute_actions_nymeria_smpl
+        self.normalize_data = normalize_data_smpl_pose
+    
+    def _get_trajectory(self, trajectory_name):
+        traj_data = torch.load(os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'), weights_only=False)
+        for k, v in traj_data.items():
+            traj_data[k] = v.to(torch.float32)
+        return traj_data
+    
+    def _compute_actions_nymeria_smpl(self, traj_data, curr_time, goal_time):
+        start_index = curr_time
+        end_index = curr_time + self.len_traj_pred + 1
+        goal_time = [min(goal_time, len(traj_data['all_parts']) - 1)]
+        
+        # absolute xyz and rpy
+        actions_xyz = traj_data['all_parts'][start_index:end_index, :self.num_segments, 0, 4:]
+        actions_quat = traj_data['all_parts'][start_index:end_index, :self.num_segments, 0, :4]
+        goals_xyz = traj_data['all_parts'][goal_time, :self.num_segments, 0, 4:]
+        goals_quat = traj_data['all_parts'][goal_time, :self.num_segments, 0, :4]
+        
+        actions_T = actions_xyz.shape[0] # Could be shorter than self.len_traj_pred
+        start_xyz = actions_xyz[0].view(1, self.num_segments, 3) # relative to each segment
+        
+        start_quat_actions = actions_quat[0].view(1, self.num_segments, 4) # initial joint angles for each segment
+        start_quat_actions = start_quat_actions.repeat((actions_T, 1, 1)) # tile so it can be applied to every timestep
+        start_quat_goals = actions_quat[0].view(1, self.num_segments, 4) # relative to each segment
+        start_quat_goals = start_quat_goals.repeat((len(goal_time), 1, 1))
+        
+        start_xyz, start_quat_actions, start_quat_goals = start_xyz.flatten(0, 1), start_quat_actions.flatten(0, 1), start_quat_goals.flatten(0, 1)
+        actions_xyz, actions_quat, goals_xyz, goals_quat = actions_xyz.flatten(0, 1), actions_quat.flatten(0, 1), goals_xyz.flatten(0, 1), goals_quat.flatten(0, 1)
+        
+        start_rot_actions, start_rot_goals = R.from_quat(start_quat_actions, scalar_first=True), R.from_quat(start_quat_goals, scalar_first=True)
+        actions_rot = R.from_quat(actions_quat, scalar_first=True)
+        goals_rot = R.from_quat(goals_quat, scalar_first=True)
+        
+        rel_actions_xyz = to_local_coords_3d(actions_xyz, start_xyz[:1], start_quat_actions[:1]).unflatten(0, (actions_T, self.num_segments)) # relative to first pelvis for translation
+        rel_goals_xyz = to_local_coords_3d(goals_xyz, start_xyz[:1], start_quat_goals[:1]).unflatten(0, (1, self.num_segments)) # relative to first pelvis for translation
+        
+        rel_actions_eulerxyz = (start_rot_actions.inv() * actions_rot).as_euler('xyz', degrees=False)
+        rel_actions_eulerxyz = torch.from_numpy(rel_actions_eulerxyz)
+        rel_actions_eulerxyz = rel_actions_eulerxyz.unflatten(0, (actions_T, self.num_segments))
+        rel_goals_eulerxyz = (start_rot_goals.inv() * goals_rot).as_euler('xyz', degrees=False)
+        rel_goals_eulerxyz = torch.from_numpy(rel_goals_eulerxyz)
+        rel_goals_eulerxyz = rel_goals_eulerxyz.unflatten(0, (1, self.num_segments))
+        
+        actions_root_xyz = rel_actions_xyz[:, 0, :] # take the pelvis/head root xyz
+        rel_actions_eulerxyz = rel_actions_eulerxyz.flatten(1)
+        start_actions = torch.cat((actions_root_xyz, rel_actions_eulerxyz), dim=-1)
+        actions = start_actions[1:]
+        
+        goal_root_xyz = rel_goals_xyz[:, 0, :]
+        rel_goals_eulerxyz = rel_goals_eulerxyz.flatten(1)
+        goal = torch.cat((goal_root_xyz, rel_goals_eulerxyz), dim=-1)
+        
+        return actions, goal
+
+class ViNT_Nymeria_Dataset(NymeriaMixin, ViNT_Dataset):
+    def __init__(self, *args, **kwargs):
+        self.traj_len_key = "all_parts"
+        
+        super().__init__(*args, **kwargs, obs_type="png")
+        self._init_nymeria()

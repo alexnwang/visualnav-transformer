@@ -1,3 +1,4 @@
+from vint_train.training.nymeria_training_utils import get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, unnormalize_data_smpl_pose
 import wandb
 import os
 import numpy as np
@@ -30,7 +31,10 @@ with open(os.path.join(os.path.dirname(__file__), "../data/data_config.yaml"), "
 # POPULATE ACTION STATS
 ACTION_STATS = {}
 for key in data_config['action_stats']:
-    ACTION_STATS[key] = np.array(data_config['action_stats'][key])
+    ACTION_STATS[key] = torch.from_numpy(np.expand_dims(data_config['action_stats'][key], axis=0))
+
+# for key in data_config['action_stats']:
+#     ACTION_STATS[key] = np.array(data_config['action_stats'][key])
 
 # Train utils for ViNT and GNM
 def _compute_losses(
@@ -492,20 +496,20 @@ def _compute_losses_nomad(
     gc_action_loss = action_reduce(F.mse_loss(gc_actions, batch_action_label, reduction="none"))
 
     uc_action_waypts_cos_similairity = action_reduce(F.cosine_similarity(
-        uc_actions[:, :, :2], batch_action_label[:, :, :2], dim=-1
+        uc_actions[:, :, :3], batch_action_label[:, :, :3], dim=-1
     ))
     uc_multi_action_waypts_cos_sim = action_reduce(F.cosine_similarity(
-        torch.flatten(uc_actions[:, :, :2], start_dim=1),
-        torch.flatten(batch_action_label[:, :, :2], start_dim=1),
+        torch.flatten(uc_actions[:, :, :3], start_dim=1),
+        torch.flatten(batch_action_label[:, :, :3], start_dim=1),
         dim=-1,
     ))
 
     gc_action_waypts_cos_similairity = action_reduce(F.cosine_similarity(
-        gc_actions[:, :, :2], batch_action_label[:, :, :2], dim=-1
+        gc_actions[:, :, :3], batch_action_label[:, :, :3], dim=-1
     ))
     gc_multi_action_waypts_cos_sim = action_reduce(F.cosine_similarity(
-        torch.flatten(gc_actions[:, :, :2], start_dim=1),
-        torch.flatten(batch_action_label[:, :, :2], start_dim=1),
+        torch.flatten(gc_actions[:, :, :3], start_dim=1),
+        torch.flatten(batch_action_label[:, :, :3], start_dim=1),
         dim=-1,
     ))
 
@@ -590,18 +594,16 @@ def train_nomad(
     with tqdm.tqdm(dataloader, desc="Train Batch", leave=False) as tepoch:
         for i, data in enumerate(tepoch):
             (
-                obs_image, 
-                goal_image,
-                actions,
-                distance,
-                goal_pos,
-                dataset_idx,
-                action_mask, 
+                obs_image, # torch.Size([256, 12, 96, 96]), # context=4 images stacked?
+                goal_image, # torch.Size([256, 3, 96, 96]), # single image
+                actions, #  torch.Size([256, 8, 48]) # 8+1 waypoints, 15 joints, xyz + 15 * xyz
+                distance, # torch.Size([256]), # scalar
+                goal_pos, # torch.Size([256, 1, 15, 7]), # single position
+                dataset_idx, # torch.Size([256]), # which dataset?
+                action_mask, # torch.Size([256]) # if valid action, I guess
             ) = data
             
             obs_images = torch.split(obs_image, 3, dim=1)
-            batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
-            batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
             batch_obs_images = [transform(obs) for obs in obs_images]
             batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
             batch_goal_images = transform(goal_image).to(device)
@@ -616,10 +618,10 @@ def train_nomad(
             # Get distance label
             distance = distance.float().to(device)
 
-            deltas = get_delta(actions)
-            ndeltas = normalize_data(deltas, ACTION_STATS)
-            naction = from_numpy(ndeltas).to(device)
-            assert naction.shape[-1] == 2, "action dim must be 2"
+            deltas = get_delta_smpl(actions, num_segments=15)
+            ndeltas = normalize_data_smpl_pose(deltas.flatten(0, 1), ACTION_STATS).unflatten(0, (B, -1))
+            naction = ndeltas.to(device).float()
+            # assert naction.shape[-1] == 2, "action dim must be 2"
 
             # Predict distance
             dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
@@ -665,10 +667,11 @@ def train_nomad(
 
             # Logging
             loss_cpu = loss.item()
-            tepoch.set_postfix(loss=loss_cpu)
-            wandb.log({"total_loss": loss_cpu})
-            wandb.log({"dist_loss": dist_loss.item()})
-            wandb.log({"diffusion_loss": diffusion_loss.item()})
+            tepoch.set_postfix(loss=loss_cpu, lr=optimizer.param_groups[0]["lr"])
+            if use_wandb:
+                wandb.log({"total_loss": loss_cpu})
+                wandb.log({"dist_loss": dist_loss.item()})
+                wandb.log({"diffusion_loss": diffusion_loss.item()})
 
 
             if i % print_log_freq == 0:
@@ -697,25 +700,45 @@ def train_nomad(
                 if use_wandb and i % wandb_log_freq == 0 and wandb_log_freq != 0:
                     wandb.log(data_log, commit=True)
 
-            if image_log_freq != 0 and i % image_log_freq == 0:
-                visualize_diffusion_action_distribution(
-                    ema_model.averaged_model,
-                    noise_scheduler,
-                    batch_obs_images,
-                    batch_goal_images,
-                    batch_viz_obs_images,
-                    batch_viz_goal_images,
-                    actions,
-                    distance,
-                    goal_pos,
-                    device,
-                    "train",
-                    project_folder,
-                    epoch,
-                    num_images_log,
-                    30,
-                    use_wandb,
-                )
+            # if image_log_freq != 0 and i % image_log_freq == 0:
+            #     batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+            #     batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+            #     visualize_diffusion_action_distribution_full_body(
+            #         ema_model.averaged_model,
+            #         noise_scheduler,
+            #         batch_obs_images,
+            #         batch_goal_images,
+            #         batch_viz_obs_images,
+            #         batch_viz_goal_images,
+            #         actions,
+            #         distance,
+            #         goal_pos,
+            #         device,
+            #         "train",
+            #         project_folder,
+            #         epoch,
+            #         num_images_log,
+            #         num_samples=30,
+            #         use_wandb=use_wandb,
+            #     )
+                # visualize_diffusion_action_distribution(
+                #     ema_model.averaged_model,
+                #     noise_scheduler,
+                #     batch_obs_images,
+                #     batch_goal_images,
+                #     batch_viz_obs_images,
+                #     batch_viz_goal_images,
+                #     actions,
+                #     distance,
+                #     goal_pos,
+                #     device,
+                #     "train",
+                #     project_folder,
+                #     epoch,
+                #     num_images_log,
+                #     30,
+                #     use_wandb,
+                # )
 
 
 def evaluate_nomad(
@@ -1001,8 +1024,9 @@ def model_output(
             timestep=k,
             sample=diffusion_output
         ).prev_sample
-
-    uc_actions = get_action(diffusion_output, ACTION_STATS)
+    B, T  = diffusion_output.shape[0], diffusion_output.shape[1]
+    diffusion_output = unnormalize_data_smpl_pose(diffusion_output.flatten(0, 1), ACTION_STATS).unflatten(0, (B, T))
+    uc_actions = get_action_smpl_torch(torch.zeros((B, 1, action_dim), device=device), diffusion_output, num_segments=15)
 
     # initialize action from Gaussian noise
     noisy_diffusion_output = torch.randn(
@@ -1024,8 +1048,9 @@ def model_output(
             timestep=k,
             sample=diffusion_output
         ).prev_sample
+    diffusion_output = unnormalize_data_smpl_pose(diffusion_output.flatten(0, 1), ACTION_STATS).unflatten(0, (B, T))
+    gc_actions = get_action_smpl_torch(torch.zeros((B, 1, action_dim), device=device), diffusion_output, num_segments=15)
     obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
-    gc_actions = get_action(diffusion_output, ACTION_STATS)
     gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
 
     return {

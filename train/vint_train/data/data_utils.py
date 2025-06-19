@@ -9,6 +9,7 @@ import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 import io
 from typing import Union
+from scipy.spatial.transform import Rotation as R
 
 VISUALIZATION_IMAGE_SIZE = (160, 120)
 IMAGE_ASPECT_RATIO = (
@@ -20,9 +21,13 @@ IMAGE_ASPECT_RATIO = (
 def get_data_path(data_folder: str, f: str, time: int, data_type: str = "image"):
     data_ext = {
         "image": ".jpg",
+        "png": ".png"
         # add more data types here
     }
-    return os.path.join(data_folder, f, f"{str(time)}{data_ext[data_type]}")
+    try:
+        return os.path.join(data_folder, f, "images", f"{str(time)}{data_ext[data_type]}")
+    except:
+        return os.path.join(data_folder, f, f"{str(time)}{data_ext[data_type]}")
 
 
 def yaw_rotmat(yaw: float) -> np.ndarray:
@@ -133,3 +138,42 @@ def img_path_to_data(path: Union[str, io.BytesIO], image_resize_size: Tuple[int,
     # return transform_images(Image.open(path), transform, image_resize_size, aspect_ratio)
     return resize_and_aspect_crop(Image.open(path), image_resize_size)    
 
+def euler_rotmat(euler_angles: torch.Tensor) -> torch.Tensor:
+    """
+    Convert batch of Euler angles (roll, pitch, yaw) to batch of rotation matrices.
+
+    Args:
+        euler_angles (torch.Tensor): Shape (B, 3), containing (roll, pitch, yaw) in radians.
+
+    Returns:
+        torch.Tensor: Shape (B, 3, 3), batch of rotation matrices.
+    """
+    r = R.from_euler('xyz', euler_angles, degrees=False)
+    r = torch.from_numpy(r.as_matrix()).to(torch.float32)
+
+    return r
+
+def to_local_coords_3d(
+    positions: torch.Tensor, curr_pos: torch.Tensor, curr_rot: torch.Tensor
+):
+    """
+    Convert positions to local coordinates
+
+    Args:
+        positions (torch.Tensor): positions to convert
+        curr_pos (torch.Tensor): current position
+        curr_rot (torch.Tensor): current rotation (euler angles, quaternion, rotation matrix)
+    Returns:
+        np.ndarray: positions in local coordinates
+    """
+    if curr_rot.shape[-1] == 3: # from euler anglers
+        rotmat = euler_rotmat(curr_rot)
+    elif curr_rot.shape[-1] == 4: # from quaternion
+        rotmat = R.from_quat(curr_rot, scalar_first=True).as_matrix()
+    elif curr_rot.shape[-1] == 9: # from rotation matrix
+        rotmat = curr_rot.unflatten(-1, (3, 3))
+    else:
+        raise NotImplementedError
+    positions_local = ((positions - curr_pos).unsqueeze(1) @ rotmat).squeeze(1)
+    
+    return positions_local

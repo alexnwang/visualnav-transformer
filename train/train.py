@@ -28,7 +28,7 @@ from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 
 
-from vint_train.data.vint_dataset import ViNT_Dataset
+from vint_train.data.vint_dataset import ViNT_Dataset, ViNT_Nymeria_Dataset
 from vint_train.training.train_eval_loop import (
     train_eval_loop,
     train_eval_loop_nomad,
@@ -92,33 +92,33 @@ def main(config):
 
         for data_split_type in ["train", "test"]:
             if data_split_type in data_config:
-                    dataset = ViNT_Dataset(
-                        data_folder=data_config["data_folder"],
-                        data_split_folder=data_config[data_split_type],
-                        dataset_name=dataset_name,
-                        image_size=config["image_size"],
-                        waypoint_spacing=data_config["waypoint_spacing"],
-                        min_dist_cat=config["distance"]["min_dist_cat"],
-                        max_dist_cat=config["distance"]["max_dist_cat"],
-                        min_action_distance=config["action"]["min_dist_cat"],
-                        max_action_distance=config["action"]["max_dist_cat"],
-                        negative_mining=data_config["negative_mining"],
-                        len_traj_pred=config["len_traj_pred"],
-                        learn_angle=config["learn_angle"],
-                        context_size=config["context_size"],
-                        context_type=config["context_type"],
-                        end_slack=data_config["end_slack"],
-                        goals_per_obs=data_config["goals_per_obs"],
-                        normalize=config["normalize"],
-                        goal_type=config["goal_type"],
-                    )
-                    if data_split_type == "train":
-                        train_dataset.append(dataset)
-                    else:
-                        dataset_type = f"{dataset_name}_{data_split_type}"
-                        if dataset_type not in test_dataloaders:
-                            test_dataloaders[dataset_type] = {}
-                        test_dataloaders[dataset_type] = dataset
+                dataset = ViNT_Nymeria_Dataset(
+                    data_folder=data_config["data_folder"],
+                    data_split_folder=data_config[data_split_type],
+                    dataset_name=dataset_name,
+                    image_size=config["image_size"],
+                    waypoint_spacing=data_config["waypoint_spacing"],
+                    min_dist_cat=config["distance"]["min_dist_cat"],
+                    max_dist_cat=config["distance"]["max_dist_cat"],
+                    min_action_distance=config["action"]["min_dist_cat"],
+                    max_action_distance=config["action"]["max_dist_cat"],
+                    negative_mining=data_config["negative_mining"],
+                    len_traj_pred=config["len_traj_pred"],
+                    learn_angle=config["learn_angle"],
+                    context_size=config["context_size"],
+                    context_type=config["context_type"],
+                    end_slack=data_config["end_slack"],
+                    goals_per_obs=data_config["goals_per_obs"],
+                    normalize=config["normalize"],
+                    goal_type=config["goal_type"],
+                )
+                if data_split_type == "train":
+                    train_dataset.append(dataset)
+                else:
+                    dataset_type = f"{dataset_name}_{data_split_type}"
+                    if dataset_type not in test_dataloaders:
+                        test_dataloaders[dataset_type] = {}
+                    test_dataloaders[dataset_type] = dataset
 
     # combine all the datasets from different robots
     train_dataset = ConcatDataset(train_dataset)
@@ -129,7 +129,7 @@ def main(config):
         shuffle=True,
         num_workers=config["num_workers"],
         drop_last=False,
-        persistent_workers=True,
+        persistent_workers=True if config["num_workers"] > 0 else False,
     )
 
     if "eval_batch_size" not in config:
@@ -198,7 +198,7 @@ def main(config):
             raise ValueError(f"Vision encoder {config['vision_encoder']} not supported")
             
         noise_pred_net = ConditionalUnet1D(
-                input_dim=2,
+                input_dim=config['input_dims'],
                 global_cond_dim=config["encoding_size"],
                 down_dims=config["down_dims"],
                 cond_predict_scale=config["cond_predict_scale"],
@@ -278,6 +278,7 @@ def main(config):
                 total_epoch=config["warmup_epochs"],
                 after_scheduler=scheduler,
             )
+            scheduler.step()
 
     current_epoch = 0
     if "load_run" in config:
@@ -386,11 +387,11 @@ if __name__ == "__main__":
     )
 
     if config["use_wandb"]:
-        wandb.login()
+        # wandb.login()
         wandb.init(
             project=config["project_name"],
             settings=wandb.Settings(start_method="fork"),
-            entity="gnmv2", # TODO: change this to your wandb entity
+            entity="alexandernwang", # TODO: change this to your wandb entity
         )
         wandb.save(args.config, policy="now")  # save the config file
         wandb.run.name = config["run_name"]

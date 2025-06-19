@@ -1,9 +1,14 @@
 
 # global params for diffusion model
 # normalized min and max
+# action_stats:
+#   min: [-2.5, -4] # [min_dx, min_dy]
+#   max: [5, 4] # [max_dx, max_dy]
+
+# action stats for nymeria
 action_stats:
-  min: [-2.5, -4] # [min_dx, min_dy]
-  max: [5, 4] # [max_dx, max_dy]
+  min: [-2, -1, -1, -1, -1, -1]
+  max: [2, 1, 1, 1, 1, 1]
 
 # data specific params
 recon:
@@ -61,3 +66,6 @@ sacson:
   metric_waypoint_spacing: 0.255
 
 # add your own dataset params here:
+
+nymeria:
+  metric_waypoint_spacing: 1.00
