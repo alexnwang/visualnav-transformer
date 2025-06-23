@@ -21,7 +21,7 @@ from vint_train.data.data_utils import (
     to_local_coords_3d
 )
 from vint_train.data.misc import XSensConstants
-from vint_train.training.nymeria_training_utils import normalize_data_smpl_pose
+from vint_train.training.nymeria_training_utils import get_delta_smpl, normalize_data_smpl_pose
 
 class ViNT_Dataset(Dataset):
     def __init__(
@@ -124,9 +124,18 @@ class ViNT_Dataset(Dataset):
         # self._build_caches()
         
         if self.learn_angle:
+            raise NotImplementedError("Angle learning is not implemented in this base class. Please use a subclass that implements it.")
             self.num_action_params = 3
         else:
-            self.num_action_params = 2
+            self.num_action_params = 48 # xyz
+            
+        self.ACTION_STATS = {}
+
+        action_stats = all_data_config['action_stats']
+        if 'action_stats' in self.data_config:
+            action_stats = self.data_config['action_stats']
+        for key in action_stats:
+            self.ACTION_STATS[key] = np.expand_dims(all_data_config['action_stats'][key], axis=0)
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -296,6 +305,15 @@ class ViNT_Dataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.index_to_data)
+    
+    def normalize_data(self, data: torch.Tensor, stats: Dict[str, Any]) -> torch.Tensor:
+        raise NotImplementedError("This method should be implemented in subclasses or mixins.")
+    
+    def _compute_actions_smpl_relpelvis(self, traj_data, curr_time, goal_time):
+        raise NotImplementedError("This method should be implemented in subclasses or mixins.")
+
+    def get_deltas(self, actions: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError("This method should be implemented in subclasses or mixins.")
 
     def __getitem__(self, i: int) -> Tuple[torch.Tensor]:
         """
@@ -357,6 +375,19 @@ class ViNT_Dataset(Dataset):
         if self.learn_angle:
             actions_torch = calculate_sin_cos(actions_torch)
         
+        # get deltas from actions and normalize
+        actions_torch = self.get_deltas(actions_torch, num_segments=self.num_segments)
+        actions_torch = self.normalize_data(actions_torch, self.ACTION_STATS)
+        
+        # normalize goals as well
+        goal_pos = torch.as_tensor(goal_pos, dtype=torch.float32)
+        goal_pos = self.normalize_data(goal_pos, self.ACTION_STATS)
+        
+        # load first pose for visualizations
+        _, first_pose = self._compute_actions_smpl_relpelvis(curr_traj_data, curr_time, curr_time)
+        first_pose = self.normalize_data(first_pose, self.ACTION_STATS)
+        
+        # compute action mask
         action_mask = (
             (distance < self.max_action_distance) and
             (distance > self.min_action_distance) and
@@ -371,6 +402,7 @@ class ViNT_Dataset(Dataset):
             torch.as_tensor(goal_pos, dtype=torch.float32),
             torch.as_tensor(self.dataset_index, dtype=torch.int64),
             torch.as_tensor(action_mask, dtype=torch.float32),
+            torch.as_tensor(first_pose, dtype=torch.float32),
         )
 
 class NymeriaMixin:
@@ -382,6 +414,8 @@ class NymeriaMixin:
         
         self._compute_actions = self._compute_actions_nymeria_smpl
         self.normalize_data = normalize_data_smpl_pose
+        self.get_deltas = get_delta_smpl
+        self._compute_actions_smpl_relpelvis = self._compute_actions_nymeria_smpl_relpelvis
     
     def _get_trajectory(self, trajectory_name):
         traj_data = torch.load(os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'), weights_only=False)
@@ -426,6 +460,49 @@ class NymeriaMixin:
         rel_goals_eulerxyz = rel_goals_eulerxyz.unflatten(0, (1, self.num_segments))
         
         actions_root_xyz = rel_actions_xyz[:, 0, :] # take the pelvis/head root xyz
+        rel_actions_eulerxyz = rel_actions_eulerxyz.flatten(1)
+        start_actions = torch.cat((actions_root_xyz, rel_actions_eulerxyz), dim=-1)
+        actions = start_actions[1:]
+        
+        goal_root_xyz = rel_goals_xyz[:, 0, :]
+        rel_goals_eulerxyz = rel_goals_eulerxyz.flatten(1)
+        goal = torch.cat((goal_root_xyz, rel_goals_eulerxyz), dim=-1)
+        
+        return actions, goal
+    
+    def _compute_actions_nymeria_smpl_relpelvis(self, traj_data, curr_time, goal_time):
+        start_index = curr_time
+        end_index = curr_time + self.len_traj_pred + 1
+        goal_time = [min(goal_time, len(traj_data['all_parts']) - 1)]
+                
+        actions_xyz = traj_data['all_parts'][start_index:end_index, :self.num_segments, 0, 4:]
+        actions_quat = traj_data['all_parts'][start_index:end_index, :self.num_segments, 0, :4]
+        goals_xyz = traj_data['all_parts'][goal_time, :self.num_segments, 0, 4:]
+        goals_quat = traj_data['all_parts'][goal_time, :self.num_segments, 0, :4]
+        
+        actions_T = actions_xyz.shape[0] # Could be shorter than self.len_traj_pred
+        
+        start_xyz = actions_xyz[0, :1].view(1, 1, 3) # relative to first pelvis
+        start_quat = actions_quat[0, :1].view(1, 1, 4) # relative to first pelvis
+        
+        start_xyz, start_quat = start_xyz.flatten(0, 1), start_quat.flatten(0, 1)
+        actions_xyz, actions_quat, goals_xyz, goals_quat = actions_xyz.flatten(0, 1), actions_quat.flatten(0, 1), goals_xyz.flatten(0, 1), goals_quat.flatten(0, 1)
+        
+        start_rot = R.from_quat(start_quat, scalar_first=True)
+        actions_rot = R.from_quat(actions_quat, scalar_first=True)
+        goals_rot = R.from_quat(goals_quat, scalar_first=True)
+        
+        rel_actions_xyz = to_local_coords_3d(actions_xyz, start_xyz, start_quat).unflatten(0, (actions_T, self.num_segments))
+        rel_goals_xyz = to_local_coords_3d(goals_xyz, start_xyz, start_quat).unflatten(0, (1, self.num_segments))
+        
+        rel_actions_eulerxyz = (start_rot.inv() * actions_rot).as_euler('xyz', degrees=False)
+        rel_actions_eulerxyz = torch.from_numpy(rel_actions_eulerxyz)
+        rel_actions_eulerxyz = rel_actions_eulerxyz.unflatten(0, (actions_T, self.num_segments))
+        rel_goals_eulerxyz = (start_rot.inv() * goals_rot).as_euler('xyz', degrees=False)
+        rel_goals_eulerxyz = torch.from_numpy(rel_goals_eulerxyz)
+        rel_goals_eulerxyz = rel_goals_eulerxyz.unflatten(0, (1, self.num_segments))
+        
+        actions_root_xyz = rel_actions_xyz[:, 0, :]
         rel_actions_eulerxyz = rel_actions_eulerxyz.flatten(1)
         start_actions = torch.cat((actions_root_xyz, rel_actions_eulerxyz), dim=-1)
         actions = start_actions[1:]

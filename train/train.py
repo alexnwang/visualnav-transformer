@@ -248,7 +248,7 @@ def main(config):
         if config["scheduler"] == "cosine":
             print("Using cosine annealing with T_max", config["epochs"])
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=config["epochs"]
+                optimizer, T_max=config["epochs"] * len(train_loader)
             )
         elif config["scheduler"] == "cyclic":
             print("Using cyclic LR with cycle", config["cyclic_period"])
@@ -275,10 +275,9 @@ def main(config):
             scheduler = GradualWarmupScheduler(
                 optimizer,
                 multiplier=1,
-                total_epoch=config["warmup_epochs"],
+                total_epoch=config["warmup_epochs"]*len(train_loader),
                 after_scheduler=scheduler,
             )
-            scheduler.step()
 
     current_epoch = 0
     if "load_run" in config:

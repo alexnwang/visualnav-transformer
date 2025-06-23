@@ -1,4 +1,5 @@
-from vint_train.training.nymeria_training_utils import get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, unnormalize_data_smpl_pose
+from vint_train.data.misc import XsensSkeleton
+from vint_train.training.nymeria_training_utils import get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, plot_images_and_actions_full_body, unnormalize_data_smpl_pose
 import wandb
 import os
 import numpy as np
@@ -537,6 +538,7 @@ def train_nomad(
     goal_mask_prob: float,
     project_folder: str,
     epoch: int,
+    lr_scheduler: torch.optim.lr_scheduler,
     alpha: float = 1e-4,
     print_log_freq: int = 100,
     wandb_log_freq: int = 10,
@@ -594,22 +596,23 @@ def train_nomad(
     with tqdm.tqdm(dataloader, desc="Train Batch", leave=False) as tepoch:
         for i, data in enumerate(tepoch):
             (
-                obs_image, # torch.Size([256, 12, 96, 96]), # context=4 images stacked?
-                goal_image, # torch.Size([256, 3, 96, 96]), # single image
-                actions, #  torch.Size([256, 8, 48]) # 8+1 waypoints, 15 joints, xyz + 15 * xyz
-                distance, # torch.Size([256]), # scalar
-                goal_pos, # torch.Size([256, 1, 15, 7]), # single position
-                dataset_idx, # torch.Size([256]), # which dataset?
-                action_mask, # torch.Size([256]) # if valid action, I guess
+                obs_image, # obs_image shape: torch.Size([256, 12, 96, 96])
+                goal_image, # goal_image shape: torch.Size([256, 3, 96, 96])
+                deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
+                distance, # distance shape: torch.Size([256])
+                goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
+                dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
+                action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
+                first_pose, # first_pose shape: torch.Size([256, 1, 48])
             ) = data
-            
+                        
             obs_images = torch.split(obs_image, 3, dim=1)
             batch_obs_images = [transform(obs) for obs in obs_images]
             batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
             batch_goal_images = transform(goal_image).to(device)
             action_mask = action_mask.to(device)
 
-            B = actions.shape[0]
+            B = deltas.shape[0]
 
             # Generate random goal mask
             goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
@@ -618,9 +621,9 @@ def train_nomad(
             # Get distance label
             distance = distance.float().to(device)
 
-            deltas = get_delta_smpl(actions, num_segments=15)
-            ndeltas = normalize_data_smpl_pose(deltas.flatten(0, 1), ACTION_STATS).unflatten(0, (B, -1))
-            naction = ndeltas.to(device).float()
+            # deltas = get_delta_smpl(actions, num_segments=15)
+            # ndeltas = normalize_data_smpl_pose(deltas.flatten(0, 1), ACTION_STATS).unflatten(0, (B, -1))
+            naction = deltas.to(device).float()
             # assert naction.shape[-1] == 2, "action dim must be 2"
 
             # Predict distance
@@ -661,6 +664,7 @@ def train_nomad(
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            lr_scheduler.step()
 
             # Update Exponential Moving Average of the model weights
             ema_model.step(model)
@@ -668,10 +672,11 @@ def train_nomad(
             # Logging
             loss_cpu = loss.item()
             tepoch.set_postfix(loss=loss_cpu, lr=optimizer.param_groups[0]["lr"])
-            if use_wandb:
-                wandb.log({"total_loss": loss_cpu})
-                wandb.log({"dist_loss": dist_loss.item()})
-                wandb.log({"diffusion_loss": diffusion_loss.item()})
+            if use_wandb and i % wandb_log_freq == 0:
+                wandb.log({"total_loss": loss_cpu}, commit=False)
+                wandb.log({"dist_loss": dist_loss.item()}, commit=False)
+                wandb.log({"diffusion_loss": diffusion_loss.item()}, commit=False)
+                wandb.log({"lr": optimizer.param_groups[0]["lr"]}, commit=False)
 
 
             if i % print_log_freq == 0:
@@ -681,7 +686,7 @@ def train_nomad(
                             batch_obs_images,
                             batch_goal_images,
                             distance.to(device),
-                            actions.to(device),
+                            deltas.to(device),
                             device,
                             action_mask.to(device),
                         )
@@ -697,49 +702,38 @@ def train_nomad(
                     if i % print_log_freq == 0 and print_log_freq != 0:
                         print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
 
-                if use_wandb and i % wandb_log_freq == 0 and wandb_log_freq != 0:
-                    wandb.log(data_log, commit=True)
+                if use_wandb and i % wandb_log_freq == 0:
+                    wandb.log(data_log, commit=False)
 
-            # if image_log_freq != 0 and i % image_log_freq == 0:
-            #     batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
-            #     batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-            #     visualize_diffusion_action_distribution_full_body(
-            #         ema_model.averaged_model,
-            #         noise_scheduler,
-            #         batch_obs_images,
-            #         batch_goal_images,
-            #         batch_viz_obs_images,
-            #         batch_viz_goal_images,
-            #         actions,
-            #         distance,
-            #         goal_pos,
-            #         device,
-            #         "train",
-            #         project_folder,
-            #         epoch,
-            #         num_images_log,
-            #         num_samples=30,
-            #         use_wandb=use_wandb,
-            #     )
-                # visualize_diffusion_action_distribution(
-                #     ema_model.averaged_model,
-                #     noise_scheduler,
-                #     batch_obs_images,
-                #     batch_goal_images,
-                #     batch_viz_obs_images,
-                #     batch_viz_goal_images,
-                #     actions,
-                #     distance,
-                #     goal_pos,
-                #     device,
-                #     "train",
-                #     project_folder,
-                #     epoch,
-                #     num_images_log,
-                #     30,
-                #     use_wandb,
-                # )
-
+            if image_log_freq != 0 and i % image_log_freq == 0:
+                model_output_dict = model_output(
+                    ema_model.averaged_model,
+                    noise_scheduler,
+                    batch_obs_images,
+                    batch_goal_images,
+                    pred_horizon=deltas.shape[1],
+                    action_dim=deltas.shape[2],
+                    num_samples=1,
+                    device=device,
+                )
+                batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+                batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+                path = os.path.join(project_folder, f"epoch_{epoch}", "train")
+                os.makedirs(path, exist_ok=True)
+                for idx_ in range(3):
+                    plot_fname = plot_images_and_actions_full_body(
+                        image_plot_dir=path,
+                        name=f"batch{i}_idx{idx_}",
+                        cur_obs_image=batch_viz_obs_images[idx_],
+                        cur_goal_image=batch_viz_goal_images[idx_],
+                        cur_first_pose=first_pose[idx_],
+                        gt_deltas=deltas[idx_],
+                        deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
+                        xsens_skel=XsensSkeleton()
+                    )
+                    if use_wandb and idx_ == 0 and i % wandb_log_freq == 0:
+                        wandb.log({f"train/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+            wandb.log({}, commit=True)  # Commit the batch log to wandb
 
 def evaluate_nomad(
     eval_type: str,
@@ -818,13 +812,14 @@ def evaluate_nomad(
         leave=False) as tepoch:
         for i, data in enumerate(tepoch):
             (
-                obs_image, 
-                goal_image,
-                actions,
-                distance,
-                goal_pos,
-                dataset_idx,
-                action_mask,
+                obs_image, # obs_image shape: torch.Size([256, 12, 96, 96])
+                goal_image, # goal_image shape: torch.Size([256, 3, 96, 96])
+                deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
+                distance, # distance shape: torch.Size([256])
+                goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
+                dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
+                action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
+                first_pose, # first_pose shape: torch.Size([256, 1, 48])
             ) = data
             
             obs_images = torch.split(obs_image, 3, dim=1)
@@ -835,7 +830,7 @@ def evaluate_nomad(
             batch_goal_images = transform(goal_image).to(device)
             action_mask = action_mask.to(device)
 
-            B = actions.shape[0]
+            B = deltas.shape[0]
 
             # Generate random goal mask
             rand_goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
@@ -851,10 +846,10 @@ def evaluate_nomad(
 
             distance = distance.to(device)
 
-            deltas = get_delta(actions)
-            ndeltas = normalize_data(deltas, ACTION_STATS)
-            naction = from_numpy(ndeltas).to(device)
-            assert naction.shape[-1] == 2, "action dim must be 2"
+            # deltas = get_delta(deltas)
+            # ndeltas = normalize_data(deltas, ACTION_STATS)
+            naction = deltas.to(device).float()
+            # assert naction.shape[-1] == 2, "action dim must be 2"
 
             # Sample noise to add to actions
             noise = torch.randn(naction.shape, device=device)
@@ -892,10 +887,10 @@ def evaluate_nomad(
             # Logging
             loss_cpu = rand_mask_loss.item()
             tepoch.set_postfix(loss=loss_cpu)
-
-            wandb.log({"diffusion_eval_loss (random masking)": rand_mask_loss})
-            wandb.log({"diffusion_eval_loss (no masking)": no_mask_loss})
-            wandb.log({"diffusion_eval_loss (goal masking)": goal_mask_loss})
+            if use_wandb and i % wandb_log_freq == 0:
+                wandb.log({"eval/diffusion_loss (random masking)": rand_mask_loss}, commit=False)
+                wandb.log({"eval/diffusion_loss (no masking)": no_mask_loss}, commit=False)
+                wandb.log({"eval/diffusion_loss (goal masking)": goal_mask_loss}, commit=False)
 
             if i % print_log_freq == 0 and print_log_freq != 0:
                 losses = _compute_losses_nomad(
@@ -904,7 +899,7 @@ def evaluate_nomad(
                             batch_obs_images,
                             batch_goal_images,
                             distance.to(device),
-                            actions.to(device),
+                            deltas.to(device),
                             device,
                             action_mask.to(device),
                         )
@@ -916,32 +911,41 @@ def evaluate_nomad(
             
                 data_log = {}
                 for key, logger in loggers.items():
-                    data_log[logger.full_name()] = logger.latest()
+                    data_log["eval/" + logger.full_name()] = logger.latest()
                     if i % print_log_freq == 0 and print_log_freq != 0:
                         print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
 
                 if use_wandb and i % wandb_log_freq == 0 and wandb_log_freq != 0:
-                    wandb.log(data_log, commit=True)
+                    wandb.log(data_log, commit=False)
 
             if image_log_freq != 0 and i % image_log_freq == 0:
-                visualize_diffusion_action_distribution(
+                model_output_dict = model_output(
                     ema_model,
                     noise_scheduler,
                     batch_obs_images,
                     batch_goal_images,
-                    batch_viz_obs_images,
-                    batch_viz_goal_images,
-                    actions,
-                    distance,
-                    goal_pos,
-                    device,
-                    eval_type,
-                    project_folder,
-                    epoch,
-                    num_images_log,
-                    30,
-                    use_wandb,
+                    pred_horizon=deltas.shape[1],
+                    action_dim=deltas.shape[2],
+                    num_samples=1,
+                    device=device,
                 )
+                batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+                batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+                path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
+                os.makedirs(path, exist_ok=True)
+                for idx_ in range(3):
+                    plot_fname = plot_images_and_actions_full_body(
+                        image_plot_dir=path,
+                        name=f"batch{i}_idx{idx_}",
+                        cur_obs_image=batch_viz_obs_images[idx_],
+                        cur_goal_image=batch_viz_goal_images[idx_],
+                        cur_first_pose=first_pose[idx_],
+                        gt_deltas=deltas[idx_],
+                        deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
+                        xsens_skel=XsensSkeleton()
+                    )
+                    if use_wandb and idx_ == 0 and i % wandb_log_freq == 0:
+                        wandb.log({f"eval/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
 
 
 # normalize data
