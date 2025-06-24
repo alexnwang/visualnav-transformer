@@ -733,7 +733,8 @@ def train_nomad(
                     )
                     if use_wandb and idx_ == 0 and i % wandb_log_freq == 0:
                         wandb.log({f"train/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
-            wandb.log({}, commit=True)  # Commit the batch log to wandb
+            if use_wandb and i % wandb_log_freq == 0:
+                wandb.log({}, commit=True)  # Commit the batch log to wandb
 
 def evaluate_nomad(
     eval_type: str,
