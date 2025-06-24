@@ -1031,7 +1031,8 @@ def model_output(
         ).prev_sample
     B, T  = diffusion_output.shape[0], diffusion_output.shape[1]
     diffusion_output = unnormalize_data_smpl_pose(diffusion_output.flatten(0, 1), ACTION_STATS).unflatten(0, (B, T))
-    uc_actions = get_action_smpl_torch(torch.zeros((B, 1, action_dim), device=device), diffusion_output, num_segments=15)
+    uc_actions = diffusion_output
+    # uc_actions = get_action_smpl_torch(torch.zeros((B, 1, action_dim), device=device), diffusion_output, num_segments=15)
 
     # initialize action from Gaussian noise
     noisy_diffusion_output = torch.randn(
@@ -1054,7 +1055,9 @@ def model_output(
             sample=diffusion_output
         ).prev_sample
     diffusion_output = unnormalize_data_smpl_pose(diffusion_output.flatten(0, 1), ACTION_STATS).unflatten(0, (B, T))
-    gc_actions = get_action_smpl_torch(torch.zeros((B, 1, action_dim), device=device), diffusion_output, num_segments=15)
+    gc_actions = diffusion_output
+    # gc_actions = get_action_smpl_torch(torch.zeros((B, 1, action_dim), device=device), diffusion_output, num_segments=15)
+    
     obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
     gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
 

@@ -275,7 +275,7 @@ def main(config):
             scheduler = GradualWarmupScheduler(
                 optimizer,
                 multiplier=1,
-                total_epoch=config["warmup_epochs"]*len(train_loader),
+                total_epoch=int(config["warmup_epochs"]*len(train_loader)),
                 after_scheduler=scheduler,
             )
 
@@ -293,6 +293,17 @@ def main(config):
     if len(config["gpu_ids"]) > 1:
         model = nn.DataParallel(model, device_ids=config["gpu_ids"])
     model = model.to(device)
+    
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Number of trainable parameters in model: {num_params}")
+    if config["model_type"] == "nomad":
+        num_vision_encoder_params = sum(p.numel() for p in vision_encoder.parameters() if p.requires_grad)
+        num_noise_pred_net_params = sum(p.numel() for p in noise_pred_net.parameters() if p.requires_grad)
+        num_dist_pred_net_params = sum(p.numel() for p in dist_pred_network.parameters() if p.requires_grad)
+        print(f"Number of trainable parameters in vision_encoder: {num_vision_encoder_params}")
+        print(f"Number of trainable parameters in noise_pred_net: {num_noise_pred_net_params}")
+        print(f"Number of trainable parameters in dist_pred_network: {num_dist_pred_net_params}")
+    
 
     if "load_run" in config:  # load optimizer and scheduler after data parallel
         if "optimizer" in latest_checkpoint:
