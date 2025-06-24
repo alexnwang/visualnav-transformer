@@ -34,7 +34,7 @@ down_dims: [64, 128, 256]
 
 # diffusion model params
 input_dims: 48
-num_diffusion_iters: 30
+num_diffusion_iters: 100
 
 # mask 
 goal_mask_prob: 0.5
