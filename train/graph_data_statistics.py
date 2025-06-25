@@ -171,57 +171,57 @@ def main(config):
         plt.close()
             
     
-        # Compute mean and variance for pelvis xyz
-        xyz_mean = xyz_all.mean(axis=0)
-        xyz_var = xyz_all.var(axis=0)
+    # Compute mean and variance for pelvis xyz
+    xyz_mean = xyz_all.mean(axis=0)
+    xyz_var = xyz_all.var(axis=0)
 
-        # Compute mean and variance for each part's rpy
-        rpy_stats = {}
-        for part, rpy in rpy_all.items():
-            rpy_stats[part] = {
-                "mean": rpy.mean(axis=0).tolist(),
-                "var": rpy.var(axis=0).tolist(),
-            }
-
-        stats = {
-            "pelvis_xyz": {
-                "mean": xyz_mean.tolist(),
-                "var": xyz_var.tolist(),
-            },
-            "rpy": rpy_stats,
+    # Compute mean and variance for each part's rpy
+    rpy_stats = {}
+    for part, rpy in rpy_all.items():
+        rpy_stats[part] = {
+            "mean": rpy.mean(axis=0).tolist(),
+            "var": rpy.var(axis=0).tolist(),
         }
 
-        with open(os.path.join(config["project_folder"], "mean_var_stats.json"), "w") as f:
-            json.dump(stats, f, indent=2)
-            
-        # Plot normalized distributions for pelvis xyz
-        xyz_norm = (xyz_all - xyz_mean) / np.sqrt(xyz_var)
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-        axes[0].hist(xyz_norm[:, 0], bins=50, alpha=0.7)
-        axes[0].set_title('Normalized Pelvis X')
-        axes[1].hist(xyz_norm[:, 1], bins=50, alpha=0.7)
-        axes[1].set_title('Normalized Pelvis Y')
-        axes[2].hist(xyz_norm[:, 2], bins=50, alpha=0.7)
-        axes[2].set_title('Normalized Pelvis Z')
-        plt.tight_layout()
-        plt.savefig(os.path.join(config["project_folder"], "pelvis_xyz_normalized_distribution.png"))
-        plt.close()
+    stats = {
+        "pelvis_xyz": {
+            "mean": xyz_mean.tolist(),
+            "var": xyz_var.tolist(),
+        },
+        "rpy": rpy_stats,
+    }
 
-        # Plot normalized distributions for each part's rpy
-        for part, rpy in rpy_all.items():
-            mean = np.array(rpy_stats[part]["mean"])
-            var = np.array(rpy_stats[part]["var"])
-            rpy_norm = (rpy - mean) / np.sqrt(var)
-            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-            axes[0].hist(rpy_norm[:, 0], bins=50, alpha=0.7)
-            axes[0].set_title(f'{part} Normalized Roll')
-            axes[1].hist(rpy_norm[:, 1], bins=50, alpha=0.7)
-            axes[1].set_title(f'{part} Normalized Pitch')
-            axes[2].hist(rpy_norm[:, 2], bins=50, alpha=0.7)
-            axes[2].set_title(f'{part} Normalized Yaw')
-            plt.tight_layout()
-            plt.savefig(os.path.join(config["project_folder"], f"{part}_rpy_normalized_distribution.png"))
-            plt.close()
+    with open(os.path.join(config["project_folder"], "mean_var_stats.json"), "w") as f:
+        json.dump(stats, f, indent=2)
+            
+    # Plot normalized distributions for pelvis xyz
+    xyz_norm = (xyz_all - xyz_mean) / np.sqrt(xyz_var)
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    axes[0].hist(xyz_norm[:, 0], bins=50, alpha=0.7)
+    axes[0].set_title('Normalized Pelvis X')
+    axes[1].hist(xyz_norm[:, 1], bins=50, alpha=0.7)
+    axes[1].set_title('Normalized Pelvis Y')
+    axes[2].hist(xyz_norm[:, 2], bins=50, alpha=0.7)
+    axes[2].set_title('Normalized Pelvis Z')
+    plt.tight_layout()
+    plt.savefig(os.path.join(config["project_folder"], "pelvis_xyz_normalized_distribution.png"))
+    plt.close()
+
+    # Plot normalized distributions for each part's rpy
+    for part, rpy in rpy_all.items():
+        mean = np.array(rpy_stats[part]["mean"])
+        var = np.array(rpy_stats[part]["var"])
+        rpy_norm = (rpy - mean) / np.sqrt(var)
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        axes[0].hist(rpy_norm[:, 0], bins=50, alpha=0.7)
+        axes[0].set_title(f'{part} Normalized Roll')
+        axes[1].hist(rpy_norm[:, 1], bins=50, alpha=0.7)
+        axes[1].set_title(f'{part} Normalized Pitch')
+        axes[2].hist(rpy_norm[:, 2], bins=50, alpha=0.7)
+        axes[2].set_title(f'{part} Normalized Yaw')
+        plt.tight_layout()
+        plt.savefig(os.path.join(config["project_folder"], f"{part}_rpy_normalized_distribution.png"))
+        plt.close()
     
 if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn")

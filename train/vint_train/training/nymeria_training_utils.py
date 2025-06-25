@@ -25,6 +25,44 @@ def normalize_data_smpl_pose(data, stats):
     ndata[:, :3] = ndata[:, :3] * 2 - 1
     return ndata
 
+GAUSS_STATS = None
+
+def normalize_data_smpl_pose_gaussian(data, stats=None):
+    global GAUSS_STATS
+    if stats is not None:
+        if GAUSS_STATS is None:
+            GAUSS_STATS = stats
+        else:
+            assert GAUSS_STATS == stats, "Global stats must match the provided stats"
+    else:
+        assert GAUSS_STATS is not None, "Stats must be provided or initialized globally"
+        stats = GAUSS_STATS
+    
+    # nomalize to [0,1]
+    ndata = data.clone()
+    mean = stats['mean'] 
+    var = stats['var']
+    
+    assert mean.shape[-1] == var.shape[-1] == data.shape[-1], "Mean and std must match the data shape"
+    
+    ndata = (ndata - mean) / torch.sqrt(var)
+    return ndata
+
+def unnormalize_data_smpl_pose_gaussian(ndata, stats=None):
+    if stats is None:
+        global GAUSS_STATS
+        stats = GAUSS_STATS
+    
+    if stats is None:
+        return ndata
+    
+    ndata = ndata.clone()
+    mean = stats['mean'].to(ndata.device)
+    var = stats['var'].to(ndata.device)
+    assert mean.shape[-1] == var.shape[-1] == ndata.shape[-1], "Mean and std must match the data shape"
+    ndata = ndata * torch.sqrt(var) + mean
+    return ndata
+
 def unnormalize_data_smpl_pose(ndata, stats):
     data = ndata.clone()
     data[:, :3] = (data[:, :3] + 1) / 2

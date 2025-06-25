@@ -1,5 +1,5 @@
 from vint_train.data.misc import XsensSkeleton
-from vint_train.training.nymeria_training_utils import get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, plot_images_and_actions_full_body, unnormalize_data_smpl_pose
+from vint_train.training.nymeria_training_utils import get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, plot_images_and_actions_full_body, unnormalize_data_smpl_pose, unnormalize_data_smpl_pose_gaussian
 import wandb
 import os
 import numpy as np
@@ -720,18 +720,23 @@ def train_nomad(
                 batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
                 path = os.path.join(project_folder, f"epoch_{epoch}", "train")
                 os.makedirs(path, exist_ok=True)
+                
+                first_pose_unnorm = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
+                gt_deltas_unnorm = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
+                uc_actions_unnorm = unnormalize_data_smpl_pose_gaussian(model_output_dict['uc_actions'].flatten(0, 1)).unflatten(0, (B, -1))
+                gc_actions_unnorm = unnormalize_data_smpl_pose_gaussian(model_output_dict['gc_actions'].flatten(0, 1)).unflatten(0, (B, -1))
                 for idx_ in range(3):
                     plot_fname = plot_images_and_actions_full_body(
                         image_plot_dir=path,
                         name=f"batch{i}_idx{idx_}",
                         cur_obs_image=batch_viz_obs_images[idx_],
                         cur_goal_image=batch_viz_goal_images[idx_],
-                        cur_first_pose=first_pose[idx_],
-                        gt_deltas=deltas[idx_],
-                        deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
+                        cur_first_pose=first_pose_unnorm[idx_],
+                        gt_deltas=gt_deltas_unnorm[idx_],
+                        deltas={"uncond": uc_actions_unnorm[idx_], "goalcond": gc_actions_unnorm[idx_]},
                         xsens_skel=XsensSkeleton()
                     )
-                    if use_wandb and idx_ == 0 and i % wandb_log_freq == 0:
+                    if use_wandb and i % wandb_log_freq == 0:
                         wandb.log({f"train/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
             if use_wandb and i % wandb_log_freq == 0:
                 wandb.log({}, commit=True)  # Commit the batch log to wandb

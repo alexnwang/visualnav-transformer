@@ -79,6 +79,7 @@ def main(config):
     if "clip_goals" not in config:
         config["clip_goals"] = False
 
+    assert len(config['datasets']) == 1, "Currently only one dataset is supported to enable unnormalization of rpy angles for graphing."
     for dataset_name in config["datasets"]:
         data_config = config["datasets"][dataset_name]
         if "negative_mining" not in data_config:
@@ -111,6 +112,7 @@ def main(config):
                     goals_per_obs=data_config["goals_per_obs"],
                     normalize=config["normalize"],
                     goal_type=config["goal_type"],
+                    gaussian_normalization_stats_path= data_config.get("gaussian_normalization_stats_path", None),
                 )
                 if data_split_type == "train":
                     train_dataset.append(dataset)

@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import os
 import pickle
@@ -21,7 +22,7 @@ from vint_train.data.data_utils import (
     to_local_coords_3d
 )
 from vint_train.data.misc import XSensConstants
-from vint_train.training.nymeria_training_utils import get_delta_smpl, normalize_data_smpl_pose
+from vint_train.training.nymeria_training_utils import get_delta_smpl, normalize_data_smpl_pose, normalize_data_smpl_pose_gaussian
 
 class ViNT_Dataset(Dataset):
     def __init__(
@@ -408,7 +409,7 @@ class ViNT_Dataset(Dataset):
         )
 
 class NymeriaMixin:
-    def _init_nymeria(self, full_body: bool = False):
+    def _init_nymeria(self, full_body: bool = False, gaussian_normalization_stats_path: str = None):
         if full_body:
             self.num_segments = XSensConstants.num_parts
         else:
@@ -418,6 +419,28 @@ class NymeriaMixin:
         self.normalize_data = normalize_data_smpl_pose
         self.get_deltas = get_delta_smpl
         self._compute_actions_smpl_relpelvis = self._compute_actions_nymeria_smpl_relpelvis
+    
+        if gaussian_normalization_stats_path is not None:
+            f = None
+            try:
+                print("attempting to load action stats for normalization to N(0,1)")
+                f = open(gaussian_normalization_stats_path)
+            except FileNotFoundError:
+                print("action stats not found, using default values")
+            if f is not None:
+                stats_json = json.load(f)
+                stats_dict = {"mean": stats_json['pelvis_xyz']['mean'], "var": stats_json['pelvis_xyz']['var']}
+                
+                for part_name in XSensConstants.part_names[:XSensConstants.upper_body_num_parts]:
+                    stats_dict["mean"] += stats_json['rpy'][part_name]['mean']
+                    stats_dict["var"] += stats_json['rpy'][part_name]['var']
+                
+                self.ACTION_STATS = {
+                    "mean": torch.tensor(stats_dict["mean"], dtype=torch.float32),
+                    "var": torch.tensor(stats_dict["var"], dtype=torch.float32)
+                }
+                
+                self.normalize_data = normalize_data_smpl_pose_gaussian
     
     def _get_trajectory(self, trajectory_name):
         traj_data = torch.load(os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'), weights_only=False)
@@ -516,8 +539,8 @@ class NymeriaMixin:
         return actions, goal
 
 class ViNT_Nymeria_Dataset(NymeriaMixin, ViNT_Dataset):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, gaussian_normalization_stats_path=None, **kwargs):
         self.traj_len_key = "all_parts"
         
         super().__init__(*args, **kwargs, obs_type="png")
-        self._init_nymeria()
+        self._init_nymeria(gaussian_normalization_stats_path=gaussian_normalization_stats_path)
