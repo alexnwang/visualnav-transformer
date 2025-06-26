@@ -1,4 +1,4 @@
-from vint_train.data.misc import XsensSkeleton
+from vint_train.data.misc import XsensSkeleton, XSensConstants
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, plot_images_and_actions_full_body, unnormalize_data_smpl_pose, unnormalize_data_smpl_pose_gaussian
 import wandb
 import os
@@ -25,6 +25,7 @@ from torch.optim import Adam
 from torchvision import transforms
 import torchvision.transforms.functional as TF
 import matplotlib.pyplot as plt
+from scipy.spatial.transform import Rotation as R
 
 # LOAD DATA CONFIG
 with open(os.path.join(os.path.dirname(__file__), "../data/data_config.yaml"), "r") as f:
@@ -513,6 +514,32 @@ def _compute_losses_nomad(
         torch.flatten(batch_action_label[:, :, :3], start_dim=1),
         dim=-1,
     ))
+    
+    # compute per-segment losses
+    segment_results = {}
+    
+    uc_actions = uc_actions.flatten(0, 1)
+    gc_actions = gc_actions.flatten(0, 1)
+    batch_action_label = batch_action_label.flatten(0, 1)
+    
+    for i, segment in enumerate(XSensConstants.part_names[:XSensConstants.upper_body_num_parts]):
+        if segment == "Pelvis":
+            segment_results[f"segments/uc_{segment}_xyz_loss"] = F.mse_loss(uc_actions[:, 3*i:3*(i+1)], batch_action_label[:, 3*i:3*(i+1)])
+            segment_results[f"segments/gc_{segment}_xyz_loss"] = F.mse_loss(gc_actions[:, 3*i:3*(i+1)], batch_action_label[:, 3*i:3*(i+1)], reduction="mean")
+        
+        uc_R = R.from_euler('xyz', to_numpy(uc_actions[:, 3*i+3:3*(i+1)+3]), degrees=False)
+        gc_R = R.from_euler('xyz', to_numpy(gc_actions[:, 3*i+3:3*(i+1)+3]), degrees=False)
+        batch_R = R.from_euler('xyz', to_numpy(batch_action_label[:, 3*i+3:3*(i+1)+3]), degrees=False)
+        
+        # Compute angular distance (in radians) between uc_R and batch_R
+        ang_dist = uc_R.inv() * batch_R
+        ang_dist = ang_dist.magnitude()  # Returns angle in radians as numpy array
+        segment_results[f"segments/uc_{segment}_angular_distance"] = torch.from_numpy(ang_dist).to(uc_actions.device).float().mean()
+        
+        # Compute angular distance (in radians) between gc_R and batch_R
+        ang_dist = gc_R.inv() * batch_R
+        ang_dist = ang_dist.magnitude()
+        segment_results[f"segments/gc_{segment}_angular_distance"] = torch.from_numpy(ang_dist).to(gc_actions.device).float().mean()
 
     results = {
         "uc_action_loss": uc_action_loss,
@@ -522,6 +549,7 @@ def _compute_losses_nomad(
         "gc_action_loss": gc_action_loss,
         "gc_action_waypts_cos_sim": gc_action_waypts_cos_similairity,
         "gc_multi_action_waypts_cos_sim": gc_multi_action_waypts_cos_sim,
+        **segment_results,
     }
 
     return results
@@ -695,12 +723,15 @@ def train_nomad(
                             action_mask.to(device),
                         )
                 
+                
+                data_log = {}
                 for key, value in losses.items():
                     if key in loggers:
                         logger = loggers[key]
                         logger.log_data(value.item())
+                    else:
+                        data_log[key] = value.item()
             
-                data_log = {}
                 for key, logger in loggers.items():
                     data_log[logger.full_name()] = logger.latest()
                     if i % print_log_freq == 0 and print_log_freq != 0:
@@ -725,8 +756,6 @@ def train_nomad(
                 path = os.path.join(project_folder, f"epoch_{epoch}", "train")
                 os.makedirs(path, exist_ok=True)
                 
-                uc_actions_unnorm = unnormalize_data_smpl_pose_gaussian(model_output_dict['uc_actions'].flatten(0, 1)).unflatten(0, (B, -1))
-                gc_actions_unnorm = unnormalize_data_smpl_pose_gaussian(model_output_dict['gc_actions'].flatten(0, 1)).unflatten(0, (B, -1))
                 for idx_ in range(3):
                     plot_fname = plot_images_and_actions_full_body(
                         image_plot_dir=path,
@@ -916,12 +945,14 @@ def evaluate_nomad(
                             action_mask.to(device),
                         )
                 
+                data_log = {}
                 for key, value in losses.items():
                     if key in loggers:
                         logger = loggers[key]
                         logger.log_data(value.item())
+                    else:
+                        data_log[f"eval_{key}"] = value.item()
             
-                data_log = {}
                 for key, logger in loggers.items():
                     data_log["eval/" + logger.full_name()] = logger.latest()
                     if i % print_log_freq == 0 and print_log_freq != 0:
