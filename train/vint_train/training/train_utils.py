@@ -450,33 +450,16 @@ def evaluate(
 
 # Train utils for NOMAD
 
-def _compute_losses_nomad(
-    ema_model,
-    noise_scheduler,
-    batch_obs_images,
-    batch_goal_images,
+def _compute_metrics_nomad(
+    model_output_dict: Dict[str, torch.Tensor],
     batch_dist_label: torch.Tensor,
     batch_action_label: torch.Tensor,
-    device: torch.device,
     action_mask: torch.Tensor,
 ):
     """
     Compute losses for distance and action prediction.
     """
 
-    pred_horizon = batch_action_label.shape[1]
-    action_dim = batch_action_label.shape[2]
-
-    model_output_dict = model_output(
-        ema_model,
-        noise_scheduler,
-        batch_obs_images,
-        batch_goal_images,
-        pred_horizon,
-        action_dim,
-        num_samples=1,
-        device=device,
-    )
     uc_actions = model_output_dict['uc_actions']
     gc_actions = model_output_dict['gc_actions']
     gc_distance = model_output_dict['gc_distance']
@@ -706,41 +689,7 @@ def train_nomad(
                 wandb.log({"diffusion_loss": diffusion_loss.item()}, commit=False)
                 wandb.log({"lr": optimizer.param_groups[0]["lr"]}, commit=False)
 
-
-            # unnormalize from gaussian for loss metrics and visualizations
-            first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
-            deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
-
-            if i % print_log_freq == 0:
-                losses = _compute_losses_nomad(
-                            ema_model.averaged_model,
-                            noise_scheduler,
-                            batch_obs_images,
-                            batch_goal_images,
-                            distance.to(device),
-                            deltas.to(device),
-                            device,
-                            action_mask.to(device),
-                        )
-                
-                
-                data_log = {}
-                for key, value in losses.items():
-                    if key in loggers:
-                        logger = loggers[key]
-                        logger.log_data(value.item())
-                    else:
-                        data_log[key] = value.item()
-            
-                for key, logger in loggers.items():
-                    data_log[logger.full_name()] = logger.latest()
-                    if i % print_log_freq == 0 and print_log_freq != 0:
-                        print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
-
-                if use_wandb and i % wandb_log_freq == 0:
-                    wandb.log(data_log, commit=False)
-
-            if image_log_freq != 0 and i % image_log_freq == 0:
+            if i % print_log_freq == 0 or (image_log_freq != 0 and i % image_log_freq == 0):
                 model_output_dict = model_output(
                     ema_model.averaged_model,
                     noise_scheduler,
@@ -751,25 +700,61 @@ def train_nomad(
                     num_samples=1,
                     device=device,
                 )
-                batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
-                batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-                path = os.path.join(project_folder, f"epoch_{epoch}", "train")
-                os.makedirs(path, exist_ok=True)
+                model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
+                    model_output_dict["gc_actions"].flatten(0, 1)
+                ).unflatten(0, (B, -1))
+                model_output_dict["uc_actions"] = unnormalize_data_smpl_pose_gaussian(
+                    model_output_dict["uc_actions"].flatten(0, 1)
+                ).unflatten(0, (B, -1))
                 
-                for idx_ in range(3):
-                    plot_fname = plot_images_and_actions_full_body(
-                        image_plot_dir=path,
-                        name=f"batch{i}_idx{idx_}",
-                        cur_obs_image=batch_viz_obs_images[idx_],
-                        cur_goal_image=batch_viz_goal_images[idx_],
-                        cur_first_pose=first_pose[idx_],
-                        gt_deltas=deltas[idx_],
-                        deltas={"uncond": model_output_dict["uc_actions"][idx_], "goalcond": model_output_dict["gc_actions"][idx_]},
-                        xsens_skel=XsensSkeleton()
-                    )
+                # unnormalize from gaussian for loss metrics and visualizations
+                first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
+                deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
+            
+                if i % print_log_freq == 0:
+                    metrics = _compute_metrics_nomad(
+                                model_output_dict,
+                                distance.to(device),
+                                deltas.to(device),
+                                action_mask.to(device),
+                            )
+                    
+                    data_log = {}
+                    for key, value in metrics.items():
+                        if key in loggers:
+                            logger = loggers[key]
+                            logger.log_data(value.item())
+                        else:
+                            data_log[key] = value.item()
+                
+                    for key, logger in loggers.items():
+                        data_log[logger.full_name()] = logger.latest()
+                        if i % print_log_freq == 0 and print_log_freq != 0:
+                            print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
+
                     if use_wandb and i % wandb_log_freq == 0:
-                        wandb.log({f"train/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
-            if use_wandb and i % wandb_log_freq == 0:
+                        wandb.log(data_log, commit=False)
+
+                if image_log_freq != 0 and i % image_log_freq == 0:
+                    batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+                    batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+                    path = os.path.join(project_folder, f"epoch_{epoch}", "train")
+                    os.makedirs(path, exist_ok=True)
+                    
+                    for idx_ in range(3):
+                        plot_fname = plot_images_and_actions_full_body(
+                            image_plot_dir=path,
+                            name=f"batch{i}_idx{idx_}",
+                            cur_obs_image=batch_viz_obs_images[idx_],
+                            cur_goal_image=batch_viz_goal_images[idx_],
+                            cur_first_pose=first_pose[idx_],
+                            gt_deltas=deltas[idx_],
+                            deltas={"uncond": model_output_dict["uc_actions"][idx_], "goalcond": model_output_dict["gc_actions"][idx_]},
+                            xsens_skel=XsensSkeleton()
+                        )
+                        if use_wandb and i % wandb_log_freq == 0:
+                            wandb.log({f"train/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+            if use_wandb and (i % wandb_log_freq == 0 or i % image_log_freq == 0 or i % print_log_freq == 0):
                 wandb.log({}, commit=True)  # Commit the batch log to wandb
 
 def evaluate_nomad(
@@ -929,39 +914,7 @@ def evaluate_nomad(
                 wandb.log({"eval/diffusion_loss (no masking)": no_mask_loss}, commit=False)
                 wandb.log({"eval/diffusion_loss (goal masking)": goal_mask_loss}, commit=False)
                 
-            # unnormalize from gaussian for loss metrics and visualizations
-            first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
-            deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
-
-            if i % print_log_freq == 0 and print_log_freq != 0:
-                losses = _compute_losses_nomad(
-                            ema_model,
-                            noise_scheduler,
-                            batch_obs_images,
-                            batch_goal_images,
-                            distance.to(device),
-                            deltas.to(device),
-                            device,
-                            action_mask.to(device),
-                        )
-                
-                data_log = {}
-                for key, value in losses.items():
-                    if key in loggers:
-                        logger = loggers[key]
-                        logger.log_data(value.item())
-                    else:
-                        data_log[f"eval_{key}"] = value.item()
-            
-                for key, logger in loggers.items():
-                    data_log["eval/" + logger.full_name()] = logger.latest()
-                    if i % print_log_freq == 0 and print_log_freq != 0:
-                        print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
-
-                if use_wandb and i % wandb_log_freq == 0 and wandb_log_freq != 0:
-                    wandb.log(data_log, commit=False)
-
-            if image_log_freq != 0 and i % image_log_freq == 0:
+            if i % print_log_freq == 0 or (image_log_freq != 0 and i % image_log_freq == 0):
                 model_output_dict = model_output(
                     ema_model,
                     noise_scheduler,
@@ -972,23 +925,61 @@ def evaluate_nomad(
                     num_samples=1,
                     device=device,
                 )
-                batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
-                batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-                path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
-                os.makedirs(path, exist_ok=True)
-                for idx_ in range(3):
-                    plot_fname = plot_images_and_actions_full_body(
-                        image_plot_dir=path,
-                        name=f"batch{i}_idx{idx_}",
-                        cur_obs_image=batch_viz_obs_images[idx_],
-                        cur_goal_image=batch_viz_goal_images[idx_],
-                        cur_first_pose=first_pose[idx_],
-                        gt_deltas=deltas[idx_],
-                        deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
-                        xsens_skel=XsensSkeleton()
-                    )
-                    if use_wandb and idx_ == 0 and i % wandb_log_freq == 0:
-                        wandb.log({f"eval/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+                model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
+                    model_output_dict["gc_actions"].flatten(0, 1)
+                ).unflatten(0, (B, -1))
+                model_output_dict["uc_actions"] = unnormalize_data_smpl_pose_gaussian(
+                    model_output_dict["uc_actions"].flatten(0, 1)
+                ).unflatten(0, (B, -1))
+                
+                # unnormalize from gaussian for loss metrics and visualizations
+                first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
+                deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
+
+                if i % print_log_freq == 0:
+                    metrics = _compute_metrics_nomad(
+                                model_output_dict,
+                                distance.to(device),
+                                deltas.to(device),
+                                action_mask.to(device),
+                            )
+                
+                    data_log = {}
+                    for key, value in metrics.items():
+                        if key in loggers:
+                            logger = loggers[key]
+                            logger.log_data(value.item())
+                        else:
+                            data_log[f"eval_{key}"] = value.item()
+                
+                    for key, logger in loggers.items():
+                        data_log["eval/" + logger.full_name()] = logger.latest()
+                        if i % print_log_freq == 0 and print_log_freq != 0:
+                            print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
+
+                    if use_wandb and i % wandb_log_freq == 0 and wandb_log_freq != 0:
+                        wandb.log(data_log, commit=False)
+
+                if image_log_freq != 0 and i % image_log_freq == 0:
+                    batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+                    batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+                    path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
+                    os.makedirs(path, exist_ok=True)
+                    for idx_ in range(3):
+                        plot_fname = plot_images_and_actions_full_body(
+                            image_plot_dir=path,
+                            name=f"batch{i}_idx{idx_}",
+                            cur_obs_image=batch_viz_obs_images[idx_],
+                            cur_goal_image=batch_viz_goal_images[idx_],
+                            cur_first_pose=first_pose[idx_],
+                            gt_deltas=deltas[idx_],
+                            deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
+                            xsens_skel=XsensSkeleton()
+                        )
+                        if use_wandb and idx_ == 0 and i % wandb_log_freq == 0:
+                            wandb.log({f"eval/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+            if use_wandb and (i % wandb_log_freq == 0 or i % image_log_freq == 0 or i % print_log_freq == 0):
+                wandb.log({}, commit=True)  # Commit the batch log to wandb
 
 
 # normalize data
@@ -1040,6 +1031,10 @@ def model_output(
     num_samples: int,
     device: torch.device,
 ):
+    """
+    Generate model output (conditioned, unconditioned, distance) for the given batch of images.
+    Outputs are DELTAS and are NOT unnormalized or scaled.
+    """
     goal_mask = torch.ones((batch_goal_images.shape[0],)).long().to(device)
     obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
     # obs_cond = obs_cond.flatten(start_dim=1)
@@ -1072,9 +1067,7 @@ def model_output(
             sample=diffusion_output
         ).prev_sample
     B, T  = diffusion_output.shape[0], diffusion_output.shape[1]
-    diffusion_output = unnormalize_data_smpl_pose(diffusion_output.flatten(0, 1), ACTION_STATS).unflatten(0, (B, T))
     uc_actions = diffusion_output
-    # uc_actions = get_action_smpl_torch(torch.zeros((B, 1, action_dim), device=device), diffusion_output, num_segments=15)
 
     # initialize action from Gaussian noise
     noisy_diffusion_output = torch.randn(
@@ -1096,15 +1089,10 @@ def model_output(
             timestep=k,
             sample=diffusion_output
         ).prev_sample
-    diffusion_output = unnormalize_data_smpl_pose(diffusion_output.flatten(0, 1), ACTION_STATS).unflatten(0, (B, T))
     gc_actions = diffusion_output
-    # gc_actions = get_action_smpl_torch(torch.zeros((B, 1, action_dim), device=device), diffusion_output, num_segments=15)
     
     obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
     gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
-    
-    uc_actions = unnormalize_data_smpl_pose_gaussian(uc_actions.flatten(0, 1)).unflatten(0, (B, T))
-    gc_actions = unnormalize_data_smpl_pose_gaussian(gc_actions.flatten(0, 1)).unflatten(0, (B, T))
 
     return {
         'uc_actions': uc_actions,
