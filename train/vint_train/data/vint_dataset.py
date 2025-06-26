@@ -22,7 +22,7 @@ from vint_train.data.data_utils import (
     to_local_coords_3d
 )
 from vint_train.data.misc import XSensConstants
-from vint_train.training.nymeria_training_utils import get_delta_smpl, normalize_data_smpl_pose, normalize_data_smpl_pose_gaussian
+from vint_train.training.nymeria_training_utils import get_delta_smpl, normalize_data_smpl_pose, normalize_data_smpl_pose_gaussian, set_gaussian_stats
 
 class ViNT_Dataset(Dataset):
     def __init__(
@@ -441,6 +441,7 @@ class NymeriaMixin:
                 }
                 
                 self.normalize_data = normalize_data_smpl_pose_gaussian
+                set_gaussian_stats(self.ACTION_STATS)
     
     def _get_trajectory(self, trajectory_name):
         traj_data = torch.load(os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'), weights_only=False)

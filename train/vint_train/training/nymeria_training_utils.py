@@ -27,17 +27,15 @@ def normalize_data_smpl_pose(data, stats):
 
 GAUSS_STATS = None
 
-def normalize_data_smpl_pose_gaussian(data, stats=None):
+def set_gaussian_stats(stats):
+    """
+    Set the global Gaussian stats for normalization.
+    This is used to ensure that the same stats are used across different calls.
+    """
     global GAUSS_STATS
-    if stats is not None:
-        if GAUSS_STATS is None:
-            GAUSS_STATS = stats
-        else:
-            assert GAUSS_STATS == stats, "Global stats must match the provided stats"
-    else:
-        assert GAUSS_STATS is not None, "Stats must be provided or initialized globally"
-        stats = GAUSS_STATS
-    
+    GAUSS_STATS = stats
+
+def normalize_data_smpl_pose_gaussian(data, stats=None):    
     # nomalize to [0,1]
     ndata = data.clone()
     mean = stats['mean'] 

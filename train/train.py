@@ -388,7 +388,8 @@ if __name__ == "__main__":
 
     config.update(user_config)
 
-    config["run_name"] += "_" + time.strftime("%Y_%m_%d_%H_%M_%S")
+    # config["run_name"] += "_" + time.strftime("%Y_%m_%d_%H_%M_%S")
+    config["run_name"] = time.strftime("%Y_%m_%d_%H_%M_%S") + ":" + config["run_name"]
     config["project_folder"] = os.path.join(
         "logs", config["project_name"], config["run_name"]
     )

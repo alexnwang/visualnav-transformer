@@ -679,6 +679,10 @@ def train_nomad(
                 wandb.log({"lr": optimizer.param_groups[0]["lr"]}, commit=False)
 
 
+            # unnormalize from gaussian for loss metrics and visualizations
+            first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
+            deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
+
             if i % print_log_freq == 0:
                 losses = _compute_losses_nomad(
                             ema_model.averaged_model,
@@ -721,8 +725,6 @@ def train_nomad(
                 path = os.path.join(project_folder, f"epoch_{epoch}", "train")
                 os.makedirs(path, exist_ok=True)
                 
-                first_pose_unnorm = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
-                gt_deltas_unnorm = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
                 uc_actions_unnorm = unnormalize_data_smpl_pose_gaussian(model_output_dict['uc_actions'].flatten(0, 1)).unflatten(0, (B, -1))
                 gc_actions_unnorm = unnormalize_data_smpl_pose_gaussian(model_output_dict['gc_actions'].flatten(0, 1)).unflatten(0, (B, -1))
                 for idx_ in range(3):
@@ -731,9 +733,9 @@ def train_nomad(
                         name=f"batch{i}_idx{idx_}",
                         cur_obs_image=batch_viz_obs_images[idx_],
                         cur_goal_image=batch_viz_goal_images[idx_],
-                        cur_first_pose=first_pose_unnorm[idx_],
-                        gt_deltas=gt_deltas_unnorm[idx_],
-                        deltas={"uncond": uc_actions_unnorm[idx_], "goalcond": gc_actions_unnorm[idx_]},
+                        cur_first_pose=first_pose[idx_],
+                        gt_deltas=deltas[idx_],
+                        deltas={"uncond": model_output_dict["uc_actions"][idx_], "goalcond": model_output_dict["gc_actions"][idx_]},
                         xsens_skel=XsensSkeleton()
                     )
                     if use_wandb and i % wandb_log_freq == 0:
@@ -897,6 +899,10 @@ def evaluate_nomad(
                 wandb.log({"eval/diffusion_loss (random masking)": rand_mask_loss}, commit=False)
                 wandb.log({"eval/diffusion_loss (no masking)": no_mask_loss}, commit=False)
                 wandb.log({"eval/diffusion_loss (goal masking)": goal_mask_loss}, commit=False)
+                
+            # unnormalize from gaussian for loss metrics and visualizations
+            first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
+            deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
 
             if i % print_log_freq == 0 and print_log_freq != 0:
                 losses = _compute_losses_nomad(
@@ -1065,151 +1071,12 @@ def model_output(
     
     obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
     gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
+    
+    uc_actions = unnormalize_data_smpl_pose_gaussian(uc_actions.flatten(0, 1)).unflatten(0, (B, T))
+    gc_actions = unnormalize_data_smpl_pose_gaussian(gc_actions.flatten(0, 1)).unflatten(0, (B, T))
 
     return {
         'uc_actions': uc_actions,
         'gc_actions': gc_actions,
         'gc_distance': gc_distance,
     }
-
-
-def visualize_diffusion_action_distribution(
-    ema_model: nn.Module,
-    noise_scheduler: DDPMScheduler,
-    batch_obs_images: torch.Tensor,
-    batch_goal_images: torch.Tensor,
-    batch_viz_obs_images: torch.Tensor,
-    batch_viz_goal_images: torch.Tensor,
-    batch_action_label: torch.Tensor,
-    batch_distance_labels: torch.Tensor,
-    batch_goal_pos: torch.Tensor,
-    device: torch.device,
-    eval_type: str,
-    project_folder: str,
-    epoch: int,
-    num_images_log: int,
-    num_samples: int = 30,
-    use_wandb: bool = True,
-):
-    """Plot samples from the exploration model."""
-
-    visualize_path = os.path.join(
-        project_folder,
-        "visualize",
-        eval_type,
-        f"epoch{epoch}",
-        "action_sampling_prediction",
-    )
-    if not os.path.isdir(visualize_path):
-        os.makedirs(visualize_path)
-
-    max_batch_size = batch_obs_images.shape[0]
-
-    num_images_log = min(num_images_log, batch_obs_images.shape[0], batch_goal_images.shape[0], batch_action_label.shape[0], batch_goal_pos.shape[0])
-    batch_obs_images = batch_obs_images[:num_images_log]
-    batch_goal_images = batch_goal_images[:num_images_log]
-    batch_action_label = batch_action_label[:num_images_log]
-    batch_goal_pos = batch_goal_pos[:num_images_log]
-    
-    wandb_list = []
-
-    pred_horizon = batch_action_label.shape[1]
-    action_dim = batch_action_label.shape[2]
-
-    # split into batches
-    batch_obs_images_list = torch.split(batch_obs_images, max_batch_size, dim=0)
-    batch_goal_images_list = torch.split(batch_goal_images, max_batch_size, dim=0)
-
-    uc_actions_list = []
-    gc_actions_list = []
-    gc_distances_list = []
-
-    for obs, goal in zip(batch_obs_images_list, batch_goal_images_list):
-        model_output_dict = model_output(
-            ema_model,
-            noise_scheduler,
-            obs,
-            goal,
-            pred_horizon,
-            action_dim,
-            num_samples,
-            device,
-        )
-        uc_actions_list.append(to_numpy(model_output_dict['uc_actions']))
-        gc_actions_list.append(to_numpy(model_output_dict['gc_actions']))
-        gc_distances_list.append(to_numpy(model_output_dict['gc_distance']))
-
-    # concatenate
-    uc_actions_list = np.concatenate(uc_actions_list, axis=0)
-    gc_actions_list = np.concatenate(gc_actions_list, axis=0)
-    gc_distances_list = np.concatenate(gc_distances_list, axis=0)
-
-    # split into actions per observation
-    uc_actions_list = np.split(uc_actions_list, num_images_log, axis=0)
-    gc_actions_list = np.split(gc_actions_list, num_images_log, axis=0)
-    gc_distances_list = np.split(gc_distances_list, num_images_log, axis=0)
-
-    gc_distances_avg = [np.mean(dist) for dist in gc_distances_list]
-    gc_distances_std = [np.std(dist) for dist in gc_distances_list]
-
-    assert len(uc_actions_list) == len(gc_actions_list) == num_images_log
-
-    np_distance_labels = to_numpy(batch_distance_labels)
-
-    for i in range(num_images_log):
-        fig, ax = plt.subplots(1, 3)
-        uc_actions = uc_actions_list[i]
-        gc_actions = gc_actions_list[i]
-        action_label = to_numpy(batch_action_label[i])
-
-        traj_list = np.concatenate([
-            uc_actions,
-            gc_actions,
-            action_label[None],
-        ], axis=0)
-        # traj_labels = ["r", "GC", "GC_mean", "GT"]
-        traj_colors = ["red"] * len(uc_actions) + ["green"] * len(gc_actions) + ["magenta"]
-        traj_alphas = [0.1] * (len(uc_actions) + len(gc_actions)) + [1.0]
-
-        # make points numpy array of robot positions (0, 0) and goal positions
-        point_list = [np.array([0, 0]), to_numpy(batch_goal_pos[i])]
-        point_colors = ["green", "red"]
-        point_alphas = [1.0, 1.0]
-
-        plot_trajs_and_points(
-            ax[0],
-            traj_list,
-            point_list,
-            traj_colors,
-            point_colors,
-            traj_labels=None,
-            point_labels=None,
-            quiver_freq=0,
-            traj_alphas=traj_alphas,
-            point_alphas=point_alphas, 
-        )
-        
-        obs_image = to_numpy(batch_viz_obs_images[i])
-        goal_image = to_numpy(batch_viz_goal_images[i])
-        # move channel to last dimension
-        obs_image = np.moveaxis(obs_image, 0, -1)
-        goal_image = np.moveaxis(goal_image, 0, -1)
-        ax[1].imshow(obs_image)
-        ax[2].imshow(goal_image)
-
-        # set title
-        ax[0].set_title(f"diffusion action predictions")
-        ax[1].set_title(f"observation")
-        ax[2].set_title(f"goal: label={np_distance_labels[i]} gc_dist={gc_distances_avg[i]:.2f}±{gc_distances_std[i]:.2f}")
-        
-        # make the plot large
-        fig.set_size_inches(18.5, 10.5)
-
-        save_path = os.path.join(visualize_path, f"sample_{i}.png")
-        plt.savefig(save_path)
-        wandb_list.append(wandb.Image(save_path))
-        plt.close(fig)
-    if len(wandb_list) > 0 and use_wandb:
-        wandb.log({f"{eval_type}_action_samples": wandb_list}, commit=False)
-
-
