@@ -30,7 +30,7 @@ cond_predict_scale: False
 mha_num_attention_heads: 8
 mha_num_attention_layers: 8
 mha_ff_dim_factor: 4
-down_dims: [64, 128, 256, 512]
+down_dims: [256, 384, 512]
 pool_features: False
 
 # diffusion model params
