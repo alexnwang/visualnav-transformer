@@ -965,7 +965,7 @@ def evaluate_nomad(
                     batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
                     path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
                     os.makedirs(path, exist_ok=True)
-                    for idx_ in range(3):
+                    for idx_ in range(10):
                         plot_fname = plot_images_and_actions_full_body(
                             image_plot_dir=path,
                             name=f"batch{i}_idx{idx_}",

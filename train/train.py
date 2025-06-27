@@ -142,7 +142,7 @@ def main(config):
             dataset,
             batch_size=config["eval_batch_size"],
             shuffle=True,
-            num_workers=0,
+            num_workers=config['num_workers'],
             drop_last=False,
         )
 
