@@ -741,7 +741,7 @@ def train_nomad(
                     path = os.path.join(project_folder, f"epoch_{epoch}", "train")
                     os.makedirs(path, exist_ok=True)
                     
-                    for idx_ in range(3):
+                    for idx_ in range(5):
                         plot_fname = plot_images_and_actions_full_body(
                             image_plot_dir=path,
                             name=f"batch{i}_idx{idx_}",
@@ -826,6 +826,12 @@ def evaluate_nomad(
     }
     num_batches = max(int(num_batches * eval_fraction), 1)
 
+    # Accumulate metrics for averaging
+    rand_mask_loss_list = []
+    no_mask_loss_list = []
+    goal_mask_loss_list = []
+    all_data_logs = []
+
     with tqdm.tqdm(
         itertools.islice(dataloader, num_batches), 
         total=num_batches, 
@@ -868,10 +874,7 @@ def evaluate_nomad(
 
             distance = distance.to(device)
 
-            # deltas = get_delta(deltas)
-            # ndeltas = normalize_data(deltas, ACTION_STATS)
             naction = deltas.to(device).float()
-            # assert naction.shape[-1] == 2, "action dim must be 2"
 
             # Sample noise to add to actions
             noise = torch.randn(naction.shape, device=device)
@@ -906,80 +909,98 @@ def evaluate_nomad(
             # L2 loss
             goal_mask_loss = nn.functional.mse_loss(goal_mask_noise_pred, noise)
             
-            # Logging
-            loss_cpu = rand_mask_loss.item()
-            tepoch.set_postfix(loss=loss_cpu)
-            if use_wandb and i % wandb_log_freq == 0:
-                wandb.log({"eval/diffusion_loss (random masking)": rand_mask_loss}, commit=False)
-                wandb.log({"eval/diffusion_loss (no masking)": no_mask_loss}, commit=False)
-                wandb.log({"eval/diffusion_loss (goal masking)": goal_mask_loss}, commit=False)
-                
-            if i % print_log_freq == 0 or (image_log_freq != 0 and i % image_log_freq == 0):
-                model_output_dict = model_output(
-                    ema_model,
-                    noise_scheduler,
-                    batch_obs_images,
-                    batch_goal_images,
-                    pred_horizon=deltas.shape[1],
-                    action_dim=deltas.shape[2],
-                    num_samples=1,
-                    device=device,
-                )
-                model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
-                    model_output_dict["gc_actions"].flatten(0, 1)
-                ).unflatten(0, (B, -1))
-                model_output_dict["uc_actions"] = unnormalize_data_smpl_pose_gaussian(
-                    model_output_dict["uc_actions"].flatten(0, 1)
-                ).unflatten(0, (B, -1))
-                
-                # unnormalize from gaussian for loss metrics and visualizations
-                first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
-                deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
+            # Accumulate losses
+            rand_mask_loss_list.append(rand_mask_loss.item())
+            no_mask_loss_list.append(no_mask_loss.item())
+            goal_mask_loss_list.append(goal_mask_loss.item())
 
-                if i % print_log_freq == 0:
-                    metrics = _compute_metrics_nomad(
-                                model_output_dict,
-                                distance.to(device),
-                                deltas.to(device),
-                                action_mask.to(device),
-                            )
-                
-                    data_log = {}
-                    for key, value in metrics.items():
-                        if key in loggers:
-                            logger = loggers[key]
-                            logger.log_data(value.item())
-                        else:
-                            data_log[f"eval_{key}"] = value.item()
-                
-                    for key, logger in loggers.items():
-                        data_log["eval/" + logger.full_name()] = logger.latest()
-                        if i % print_log_freq == 0 and print_log_freq != 0:
-                            print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
+            tepoch.set_postfix(loss=rand_mask_loss.item())
 
-                    if use_wandb and i % wandb_log_freq == 0 and wandb_log_freq != 0:
-                        wandb.log(data_log, commit=False)
+            # Accumulate metrics for averaging at the end
+            model_output_dict = model_output(
+                ema_model,
+                noise_scheduler,
+                batch_obs_images,
+                batch_goal_images,
+                pred_horizon=deltas.shape[1],
+                action_dim=deltas.shape[2],
+                num_samples=1,
+                device=device,
+            )
+            model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
+                model_output_dict["gc_actions"].flatten(0, 1)
+            ).unflatten(0, (B, -1))
+            model_output_dict["uc_actions"] = unnormalize_data_smpl_pose_gaussian(
+                model_output_dict["uc_actions"].flatten(0, 1)
+            ).unflatten(0, (B, -1))
+            
+            # unnormalize from gaussian for loss metrics and visualizations
+            first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
+            deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
 
-                if image_log_freq != 0 and i % image_log_freq == 0:
-                    batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
-                    batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-                    path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
-                    os.makedirs(path, exist_ok=True)
-                    for idx_ in range(10):
-                        plot_fname = plot_images_and_actions_full_body(
-                            image_plot_dir=path,
-                            name=f"batch{i}_idx{idx_}",
-                            cur_obs_image=batch_viz_obs_images[idx_],
-                            cur_goal_image=batch_viz_goal_images[idx_],
-                            cur_first_pose=first_pose[idx_],
-                            gt_deltas=deltas[idx_],
-                            deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
-                            xsens_skel=XsensSkeleton()
+            if i % print_log_freq == 0:
+                metrics = _compute_metrics_nomad(
+                            model_output_dict,
+                            distance.to(device),
+                            deltas.to(device),
+                            action_mask.to(device),
                         )
-                        if use_wandb and idx_ == 0 and i % wandb_log_freq == 0:
-                            wandb.log({f"eval/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
-            if use_wandb and (i % wandb_log_freq == 0 or i % image_log_freq == 0 or i % print_log_freq == 0):
-                wandb.log({}, commit=True)  # Commit the batch log to wandb
+            
+                data_log = {}
+                for key, value in metrics.items():
+                    if key in loggers:
+                        logger = loggers[key]
+                        logger.log_data(value.item())
+                    else:
+                        data_log[f"eval_{key}"] = value.item()
+            
+                for key, logger in loggers.items():
+                    data_log["eval/" + logger.full_name()] = logger.latest()
+                    if i % print_log_freq == 0 and print_log_freq != 0:
+                        print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
+
+                all_data_logs.append(data_log)
+
+            if i == 0:
+                batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+                batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+                path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
+                os.makedirs(path, exist_ok=True)
+                for idx_ in range(10):
+                    plot_fname = plot_images_and_actions_full_body(
+                        image_plot_dir=path,
+                        name=f"batch{i}_idx{idx_}",
+                        cur_obs_image=batch_viz_obs_images[idx_],
+                        cur_goal_image=batch_viz_goal_images[idx_],
+                        cur_first_pose=first_pose[idx_],
+                        gt_deltas=deltas[idx_],
+                        deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
+                        xsens_skel=XsensSkeleton()
+                    )
+                    if use_wandb:
+                        wandb.log({f"eval_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+
+    # At the end, log averaged metrics to wandb
+    if use_wandb:
+        avg_rand_mask_loss = np.mean(rand_mask_loss_list) if rand_mask_loss_list else 0.0
+        avg_no_mask_loss = np.mean(no_mask_loss_list) if no_mask_loss_list else 0.0
+        avg_goal_mask_loss = np.mean(goal_mask_loss_list) if goal_mask_loss_list else 0.0
+
+        # Average all_data_logs if present
+        avg_data_log = {}
+        if all_data_logs:
+            keys = set().union(*all_data_logs)
+            for key in keys:
+                vals = [d[key] for d in all_data_logs if key in d]
+                if vals:
+                    avg_data_log[key] = float(np.mean(vals))
+
+        # Add the diffusion losses
+        avg_data_log["eval/diffusion_loss (random masking)"] = avg_rand_mask_loss
+        avg_data_log["eval/diffusion_loss (no masking)"] = avg_no_mask_loss
+        avg_data_log["eval/diffusion_loss (goal masking)"] = avg_goal_mask_loss
+
+        wandb.log(avg_data_log)
 
 
 # normalize data
