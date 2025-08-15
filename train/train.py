@@ -132,6 +132,7 @@ def main(config):
         num_workers=config["num_workers"],
         drop_last=False,
         persistent_workers=True if config["num_workers"] > 0 else False,
+        pin_memory=True,
     )
 
     if "eval_batch_size" not in config:

@@ -620,8 +620,10 @@ def train_nomad(
             obs_images = torch.split(obs_image, 3, dim=1)
             batch_obs_images = [transform(obs) for obs in obs_images]
             batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
-            batch_goal_images = transform(goal_image).to(device)
-            action_mask = action_mask.to(device)
+            batch_goal_images = transform(goal_image).to(device, non_blocking=True)
+            action_mask = action_mask.to(device, non_blocking=True)
+            distance = distance.float().to(device, non_blocking=True)
+            naction = deltas.to(device, non_blocking=True).float()
 
             B = deltas.shape[0]
 
@@ -629,13 +631,6 @@ def train_nomad(
             goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
             obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
             
-            # Get distance label
-            distance = distance.float().to(device)
-
-            # deltas = get_delta_smpl(actions, num_segments=15)
-            # ndeltas = normalize_data_smpl_pose(deltas.flatten(0, 1), ACTION_STATS).unflatten(0, (B, -1))
-            naction = deltas.to(device).float()
-            # assert naction.shape[-1] == 2, "action dim must be 2"
 
             # Predict distance
             dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
