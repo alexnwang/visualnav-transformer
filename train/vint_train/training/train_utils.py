@@ -604,153 +604,161 @@ def train_nomad(
         "gc_action_waypts_cos_sim": gc_action_waypts_cos_sim_logger,
         "gc_multi_action_waypts_cos_sim": gc_multi_action_waypts_cos_sim_logger,
     }
-    with tqdm.tqdm(dataloader, desc="Train Batch", leave=False) as tepoch:
-        for i, data in enumerate(tepoch):
-            (
-                obs_image, # obs_image shape: torch.Size([256, 12, 96, 96])
-                goal_image, # goal_image shape: torch.Size([256, 3, 96, 96])
-                deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
-                distance, # distance shape: torch.Size([256])
-                goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
-                dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
-                action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
-                first_pose, # first_pose shape: torch.Size([256, 1, 48])
-            ) = data
-                        
-            obs_images = torch.split(obs_image, 3, dim=1)
-            batch_obs_images = [transform(obs) for obs in obs_images]
-            batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
-            batch_goal_images = transform(goal_image).to(device, non_blocking=True)
-            action_mask = action_mask.to(device, non_blocking=True)
-            distance = distance.float().to(device, non_blocking=True)
-            naction = deltas.to(device, non_blocking=True).float()
-
-            B = deltas.shape[0]
-
-            # Generate random goal mask
-            goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
-            obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
-            
-
-            # Predict distance
-            dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
-            dist_loss = nn.functional.mse_loss(dist_pred.squeeze(-1), distance)
-            dist_loss = (dist_loss * (1 - goal_mask.float())).mean() / (1e-2 +(1 - goal_mask.float()).mean())
-
-            # Sample noise to add to actions
-            noise = torch.randn(naction.shape, device=device)
-
-            # Sample a diffusion iteration for each data point
-            timesteps = torch.randint(
-                0, noise_scheduler.config.num_train_timesteps,
-                (B,), device=device
-            ).long()
-
-            # Add noise to the clean images according to the noise magnitude at each diffusion iteration
-            noisy_action = noise_scheduler.add_noise(
-                naction, noise, timesteps)
-            
-            # Predict the noise residual
-            noise_pred = model("noise_pred_net", sample=noisy_action, timestep=timesteps, global_cond=obsgoal_cond)
-
-            def action_reduce(unreduced_loss: torch.Tensor):
-                # Reduce over non-batch dimensions to get loss per batch element
-                while unreduced_loss.dim() > 1:
-                    unreduced_loss = unreduced_loss.mean(dim=-1)
-                assert unreduced_loss.shape == action_mask.shape, f"{unreduced_loss.shape} != {action_mask.shape}"
-                return (unreduced_loss * action_mask).mean() / (action_mask.mean() + 1e-2)
-
-            # L2 loss
-            diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
-            
-            # Total loss
-            loss = alpha * dist_loss + (1-alpha) * diffusion_loss
-
-            # Optimize
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            lr_scheduler.step()
-
-            # Update Exponential Moving Average of the model weights
-            ema_model.step(model)
-
-            # Logging
-            loss_cpu = loss.item()
-            tepoch.set_postfix(loss=loss_cpu, lr=optimizer.param_groups[0]["lr"])
-            if use_wandb and i % wandb_log_freq == 0:
-                wandb.log({"total_loss": loss_cpu}, commit=False)
-                wandb.log({"dist_loss": dist_loss.item()}, commit=False)
-                wandb.log({"diffusion_loss": diffusion_loss.item()}, commit=False)
-                wandb.log({"lr": optimizer.param_groups[0]["lr"]}, commit=False)
-
-            if i % print_log_freq == 0 or (image_log_freq != 0 and i % image_log_freq == 0):
-                model_output_dict = model_output(
-                    ema_model.averaged_model,
-                    noise_scheduler,
-                    batch_obs_images,
-                    batch_goal_images,
-                    pred_horizon=deltas.shape[1],
-                    action_dim=deltas.shape[2],
-                    num_samples=1,
-                    device=device,
-                )
-                model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
-                    model_output_dict["gc_actions"].flatten(0, 1)
-                ).unflatten(0, (B, -1))
-                model_output_dict["uc_actions"] = unnormalize_data_smpl_pose_gaussian(
-                    model_output_dict["uc_actions"].flatten(0, 1)
-                ).unflatten(0, (B, -1))
-                
-                # unnormalize from gaussian for loss metrics and visualizations
-                first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
-                deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
-            
-                if i % print_log_freq == 0:
-                    metrics = _compute_metrics_nomad(
-                                model_output_dict,
-                                distance.to(device),
-                                deltas.to(device),
-                                action_mask.to(device),
-                            )
+    if torch.distributed.is_initialized():
+        rank = torch.distributed.get_rank()
+    else:
+        rank = 0
+    
+    if rank == 0:
+        tepoch = tqdm.tqdm(dataloader, desc="Train Batch", leave=False)
+    else:
+        tepoch = dataloader
+    for i, data in enumerate(tepoch):
+        (
+            obs_image, # obs_image shape: torch.Size([256, 12, 96, 96])
+            goal_image, # goal_image shape: torch.Size([256, 3, 96, 96])
+            deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
+            distance, # distance shape: torch.Size([256])
+            goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
+            dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
+            action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
+            first_pose, # first_pose shape: torch.Size([256, 1, 48])
+        ) = data
                     
-                    data_log = {}
-                    for key, value in metrics.items():
-                        if key in loggers:
-                            logger = loggers[key]
-                            logger.log_data(value.item())
-                        else:
-                            data_log[key] = value.item()
-                
-                    for key, logger in loggers.items():
-                        data_log[logger.full_name()] = logger.latest()
-                        if i % print_log_freq == 0 and print_log_freq != 0:
-                            print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
+        obs_images = torch.split(obs_image, 3, dim=1)
+        batch_obs_images = [transform(obs) for obs in obs_images]
+        batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
+        batch_goal_images = transform(goal_image).to(device, non_blocking=True)
+        action_mask = action_mask.to(device, non_blocking=True)
+        distance = distance.float().to(device, non_blocking=True)
+        naction = deltas.to(device, non_blocking=True).float()
 
-                    if use_wandb and i % wandb_log_freq == 0:
-                        wandb.log(data_log, commit=False)
+        B = deltas.shape[0]
 
-                if image_log_freq != 0 and i % image_log_freq == 0:
-                    batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
-                    batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-                    path = os.path.join(project_folder, f"epoch_{epoch}", "train")
-                    os.makedirs(path, exist_ok=True)
-                    
-                    for idx_ in range(5):
-                        plot_fname = plot_images_and_actions_full_body(
-                            image_plot_dir=path,
-                            name=f"batch{i}_idx{idx_}",
-                            cur_obs_image=batch_viz_obs_images[idx_],
-                            cur_goal_image=batch_viz_goal_images[idx_],
-                            cur_first_pose=first_pose[idx_],
-                            gt_deltas=deltas[idx_],
-                            deltas={"uncond": model_output_dict["uc_actions"][idx_], "goalcond": model_output_dict["gc_actions"][idx_]},
-                            xsens_skel=XsensSkeleton()
+        # Generate random goal mask
+        goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
+        obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
+        
+
+        # Predict distance
+        dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
+        dist_loss = nn.functional.mse_loss(dist_pred.squeeze(-1), distance)
+        dist_loss = (dist_loss * (1 - goal_mask.float())).mean() / (1e-2 +(1 - goal_mask.float()).mean())
+
+        # Sample noise to add to actions
+        noise = torch.randn(naction.shape, device=device)
+
+        # Sample a diffusion iteration for each data point
+        timesteps = torch.randint(
+            0, noise_scheduler.config.num_train_timesteps,
+            (B,), device=device
+        ).long()
+
+        # Add noise to the clean images according to the noise magnitude at each diffusion iteration
+        noisy_action = noise_scheduler.add_noise(
+            naction, noise, timesteps)
+        
+        # Predict the noise residual
+        noise_pred = model("noise_pred_net", sample=noisy_action, timestep=timesteps, global_cond=obsgoal_cond)
+
+        def action_reduce(unreduced_loss: torch.Tensor):
+            # Reduce over non-batch dimensions to get loss per batch element
+            while unreduced_loss.dim() > 1:
+                unreduced_loss = unreduced_loss.mean(dim=-1)
+            assert unreduced_loss.shape == action_mask.shape, f"{unreduced_loss.shape} != {action_mask.shape}"
+            return (unreduced_loss * action_mask).mean() / (action_mask.mean() + 1e-2)
+
+        # L2 loss
+        diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
+        
+        # Total loss
+        loss = alpha * dist_loss + (1-alpha) * diffusion_loss
+
+        # Optimize
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        lr_scheduler.step()
+
+        # Update Exponential Moving Average of the model weights
+        ema_model.step(model)
+
+        # Logging
+        loss_cpu = loss.item()
+        tepoch.set_postfix(loss=loss_cpu, lr=optimizer.param_groups[0]["lr"])
+        if use_wandb and i % wandb_log_freq == 0:
+            wandb.log({"total_loss": loss_cpu}, commit=False)
+            wandb.log({"dist_loss": dist_loss.item()}, commit=False)
+            wandb.log({"diffusion_loss": diffusion_loss.item()}, commit=False)
+            wandb.log({"lr": optimizer.param_groups[0]["lr"]}, commit=False)
+
+        if i % print_log_freq == 0 or (image_log_freq != 0 and i % image_log_freq == 0):
+            model_output_dict = model_output(
+                ema_model.averaged_model,
+                noise_scheduler,
+                batch_obs_images,
+                batch_goal_images,
+                pred_horizon=deltas.shape[1],
+                action_dim=deltas.shape[2],
+                num_samples=1,
+                device=device,
+            )
+            model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
+                model_output_dict["gc_actions"].flatten(0, 1)
+            ).unflatten(0, (B, -1))
+            model_output_dict["uc_actions"] = unnormalize_data_smpl_pose_gaussian(
+                model_output_dict["uc_actions"].flatten(0, 1)
+            ).unflatten(0, (B, -1))
+            
+            # unnormalize from gaussian for loss metrics and visualizations
+            first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
+            deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
+        
+            if i % print_log_freq == 0:
+                metrics = _compute_metrics_nomad(
+                            model_output_dict,
+                            distance.to(device),
+                            deltas.to(device),
+                            action_mask.to(device),
                         )
-                        if use_wandb and i % wandb_log_freq == 0:
-                            wandb.log({f"train/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
-            if use_wandb and (i % wandb_log_freq == 0 or i % image_log_freq == 0 or i % print_log_freq == 0):
-                wandb.log({}, commit=True)  # Commit the batch log to wandb
+                
+                data_log = {}
+                for key, value in metrics.items():
+                    if key in loggers:
+                        logger = loggers[key]
+                        logger.log_data(value.item())
+                    else:
+                        data_log[key] = value.item()
+            
+                for key, logger in loggers.items():
+                    data_log[logger.full_name()] = logger.latest()
+                    if i % print_log_freq == 0 and print_log_freq != 0:
+                        print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
+
+                if use_wandb and i % wandb_log_freq == 0:
+                    wandb.log(data_log, commit=False)
+
+            if image_log_freq != 0 and i % image_log_freq == 0:
+                batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+                batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+                path = os.path.join(project_folder, f"epoch_{epoch}", "train")
+                os.makedirs(path, exist_ok=True)
+                
+                for idx_ in range(5):
+                    plot_fname = plot_images_and_actions_full_body(
+                        image_plot_dir=path,
+                        name=f"batch{i}_idx{idx_}",
+                        cur_obs_image=batch_viz_obs_images[idx_],
+                        cur_goal_image=batch_viz_goal_images[idx_],
+                        cur_first_pose=first_pose[idx_],
+                        gt_deltas=deltas[idx_],
+                        deltas={"uncond": model_output_dict["uc_actions"][idx_], "goalcond": model_output_dict["gc_actions"][idx_]},
+                        xsens_skel=XsensSkeleton()
+                    )
+                    if use_wandb and i % wandb_log_freq == 0:
+                        wandb.log({f"train/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+        if use_wandb and (i % wandb_log_freq == 0 or i % image_log_freq == 0 or i % print_log_freq == 0):
+            wandb.log({}, commit=True)  # Commit the batch log to wandb
 
 def evaluate_nomad(
     eval_type: str,
