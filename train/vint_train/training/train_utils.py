@@ -147,6 +147,7 @@ def train_nomad(
     image_log_freq: int = 1000,
     num_images_log: int = 8,
     use_wandb: bool = True,
+    rank: int = 0,
 ):
     """
     Train the model for one epoch.
@@ -171,34 +172,7 @@ def train_nomad(
     model.train()
     num_batches = len(dataloader)
 
-    uc_action_loss_logger = Logger("uc_action_loss", "train", window_size=print_log_freq)
-    uc_action_waypts_cos_sim_logger = Logger(
-        "uc_action_waypts_cos_sim", "train", window_size=print_log_freq
-    )
-    uc_multi_action_waypts_cos_sim_logger = Logger(
-        "uc_multi_action_waypts_cos_sim", "train", window_size=print_log_freq
-    )
-    gc_dist_loss_logger = Logger("gc_dist_loss", "train", window_size=print_log_freq)
-    gc_action_loss_logger = Logger("gc_action_loss", "train", window_size=print_log_freq)
-    gc_action_waypts_cos_sim_logger = Logger(
-        "gc_action_waypts_cos_sim", "train", window_size=print_log_freq
-    )
-    gc_multi_action_waypts_cos_sim_logger = Logger(
-        "gc_multi_action_waypts_cos_sim", "train", window_size=print_log_freq
-    )
-    loggers = {
-        "uc_action_loss": uc_action_loss_logger,
-        "uc_action_waypts_cos_sim": uc_action_waypts_cos_sim_logger,
-        "uc_multi_action_waypts_cos_sim": uc_multi_action_waypts_cos_sim_logger,
-        "gc_dist_loss": gc_dist_loss_logger,
-        "gc_action_loss": gc_action_loss_logger,
-        "gc_action_waypts_cos_sim": gc_action_waypts_cos_sim_logger,
-        "gc_multi_action_waypts_cos_sim": gc_multi_action_waypts_cos_sim_logger,
-    }
-    if torch.distributed.is_initialized():
-        rank = torch.distributed.get_rank()
-    else:
-        rank = 0
+    loggers = {}
     
     if rank == 0:
         tepoch = tqdm.tqdm(dataloader, desc="Train Batch", leave=False)
@@ -276,11 +250,26 @@ def train_nomad(
 
         # Logging
         loss_cpu = loss.item()
-        tepoch.set_postfix(loss=loss_cpu, lr=optimizer.param_groups[0]["lr"])
-        if use_wandb and i % wandb_log_freq == 0:
-            wandb.log({"total_loss": loss_cpu}, commit=False)
-            wandb.log({"dist_loss": dist_loss.item()}, commit=False)
-            wandb.log({"diffusion_loss": diffusion_loss.item()}, commit=False)
+        if isinstance(tepoch, tqdm.tqdm):   
+            tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
+
+
+        reduced_loss = loss.clone()
+        reduced_dist_loss = dist_loss.clone()
+        reduced_diffusion_loss = diffusion_loss.clone()
+        
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(reduced_loss, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(reduced_dist_loss, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(reduced_diffusion_loss, op=torch.distributed.ReduceOp.SUM)
+            reduced_loss = reduced_loss / torch.distributed.get_world_size()
+            reduced_dist_loss = reduced_dist_loss / torch.distributed.get_world_size()
+            reduced_diffusion_loss = reduced_diffusion_loss / torch.distributed.get_world_size()
+            
+        if use_wandb and i % wandb_log_freq == 0 and rank == 0:
+            wandb.log({"total_loss": reduced_loss}, commit=False)
+            wandb.log({"dist_loss": reduced_dist_loss}, commit=False)
+            wandb.log({"diffusion_loss": reduced_diffusion_loss}, commit=False)
             wandb.log({"lr": optimizer.param_groups[0]["lr"]}, commit=False)
 
         if i % print_log_freq == 0 or (image_log_freq != 0 and i % image_log_freq == 0):
@@ -313,23 +302,29 @@ def train_nomad(
                             action_mask.to(device),
                         )
                 
+                if torch.distributed.is_initialized():
+                    # Reduce all metrics across ranks by averaging
+                    for key, value in metrics.items():
+                        torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
+                        metrics[key] = value / torch.distributed.get_world_size()
+                
                 data_log = {}
                 for key, value in metrics.items():
-                    if key in loggers:
-                        logger = loggers[key]
-                        logger.log_data(value.item())
-                    else:
-                        data_log[key] = value.item()
+                    if key not in loggers:
+                        loggers[key] = Logger(key, "train", window_size=print_log_freq)
+                    loggers[key].log_data(value.item())
+                    data_log[key] = value.item()
             
                 for key, logger in loggers.items():
-                    data_log[logger.full_name()] = logger.latest()
-                    if i % print_log_freq == 0 and print_log_freq != 0:
+                    if "segments/" in key:
+                        continue
+                    if i % print_log_freq == 0 and print_log_freq != 0 and rank == 0:
                         print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
 
-                if use_wandb and i % wandb_log_freq == 0:
+                if use_wandb and i % wandb_log_freq == 0 and rank == 0:
                     wandb.log(data_log, commit=False)
 
-            if image_log_freq != 0 and i % image_log_freq == 0:
+            if image_log_freq != 0 and i % image_log_freq == 0 and rank == 0:
                 batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
                 batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
                 path = os.path.join(project_folder, f"epoch_{epoch}", "train")
@@ -347,10 +342,11 @@ def train_nomad(
                         xsens_skel=XsensSkeleton()
                     )
                     if use_wandb and i % wandb_log_freq == 0:
-                        wandb.log({f"train/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
-        if use_wandb and (i % wandb_log_freq == 0 or i % image_log_freq == 0 or i % print_log_freq == 0):
+                        wandb.log({f"train_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+        if use_wandb and (i % wandb_log_freq == 0 or i % image_log_freq == 0 or i % print_log_freq == 0) and rank == 0:
             wandb.log({}, commit=True)  # Commit the batch log to wandb
 
+@torch.no_grad()
 def evaluate_nomad(
     eval_type: str,
     ema_model: EMAModel,
@@ -367,6 +363,7 @@ def evaluate_nomad(
     num_images_log: int = 8,
     eval_fraction: float = 0.25,
     use_wandb: bool = True,
+    rank: int = 0,
 ):
     """
     Evaluate the model on the given evaluation dataset.
@@ -391,34 +388,12 @@ def evaluate_nomad(
     goal_mask_prob = torch.clip(torch.tensor(goal_mask_prob), 0, 1)
     ema_model = ema_model.averaged_model
     ema_model.eval()
+    eval_model = ema_model.to(device)
     
     num_batches = len(dataloader)
-
-    uc_action_loss_logger = Logger("uc_action_loss", eval_type, window_size=print_log_freq)
-    uc_action_waypts_cos_sim_logger = Logger(
-        "uc_action_waypts_cos_sim", eval_type, window_size=print_log_freq
-    )
-    uc_multi_action_waypts_cos_sim_logger = Logger(
-        "uc_multi_action_waypts_cos_sim", eval_type, window_size=print_log_freq
-    )
-    gc_dist_loss_logger = Logger("gc_dist_loss", eval_type, window_size=print_log_freq)
-    gc_action_loss_logger = Logger("gc_action_loss", eval_type, window_size=print_log_freq)
-    gc_action_waypts_cos_sim_logger = Logger(
-        "gc_action_waypts_cos_sim", eval_type, window_size=print_log_freq
-    )
-    gc_multi_action_waypts_cos_sim_logger = Logger(
-        "gc_multi_action_waypts_cos_sim", eval_type, window_size=print_log_freq
-    )
-    loggers = {
-        "uc_action_loss": uc_action_loss_logger,
-        "uc_action_waypts_cos_sim": uc_action_waypts_cos_sim_logger,
-        "uc_multi_action_waypts_cos_sim": uc_multi_action_waypts_cos_sim_logger,
-        "gc_dist_loss": gc_dist_loss_logger,
-        "gc_action_loss": gc_action_loss_logger,
-        "gc_action_waypts_cos_sim": gc_action_waypts_cos_sim_logger,
-        "gc_multi_action_waypts_cos_sim": gc_multi_action_waypts_cos_sim_logger,
-    }
     num_batches = max(int(num_batches * eval_fraction), 1)
+    
+    loggers = {}
 
     # Accumulate metrics for averaging
     rand_mask_loss_list = []
@@ -426,160 +401,177 @@ def evaluate_nomad(
     goal_mask_loss_list = []
     all_data_logs = []
 
-    with tqdm.tqdm(
-        itertools.islice(dataloader, num_batches), 
-        total=num_batches, 
-        dynamic_ncols=True, 
-        desc=f"Evaluating {eval_type} for epoch {epoch}", 
-        leave=False) as tepoch:
-        for i, data in enumerate(tepoch):
-            (
-                obs_image, # obs_image shape: torch.Size([256, 12, 96, 96])
-                goal_image, # goal_image shape: torch.Size([256, 3, 96, 96])
-                deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
-                distance, # distance shape: torch.Size([256])
-                goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
-                dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
-                action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
-                first_pose, # first_pose shape: torch.Size([256, 1, 48])
-            ) = data
+    if rank == 0:
+        tepoch = tqdm.tqdm(
+            itertools.islice(dataloader, num_batches), 
+            total=num_batches, 
+            dynamic_ncols=True, 
+            desc=f"Evaluating {eval_type} for epoch {epoch}", 
+            leave=False)
+    else:
+        tepoch = itertools.islice(dataloader, num_batches)
+        
+    for i, data in enumerate(tepoch):
+        (
+            obs_image, # obs_image shape: torch.Size([256, 12, 96, 96])
+            goal_image, # goal_image shape: torch.Size([256, 3, 96, 96])
+            deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
+            distance, # distance shape: torch.Size([256])
+            goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
+            dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
+            action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
+            first_pose, # first_pose shape: torch.Size([256, 1, 48])
+        ) = data
+        
+        obs_images = torch.split(obs_image, 3, dim=1)
+        batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+        batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+        batch_obs_images = [transform(obs) for obs in obs_images]
+        batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
+        batch_goal_images = transform(goal_image).to(device)
+        action_mask = action_mask.to(device)
+
+        B = deltas.shape[0]
+
+        # Generate random goal mask
+        rand_goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
+        goal_mask = torch.ones_like(rand_goal_mask).long().to(device)
+        no_mask = torch.zeros_like(rand_goal_mask).long().to(device)
+
+        rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask)
+
+        obsgoal_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask)
+        obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
+
+        goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
+
+        distance = distance.to(device)
+
+        naction = deltas.to(device).float()
+
+        # Sample noise to add to actions
+        noise = torch.randn(naction.shape, device=device)
+
+        # Sample a diffusion iteration for each data point
+        timesteps = torch.randint(
+            0, noise_scheduler.config.num_train_timesteps,
+            (B,), device=device
+        ).long()
+
+        noisy_actions = noise_scheduler.add_noise(
+            naction, noise, timesteps)
+
+        ### RANDOM MASK ERROR ###
+        # Predict the noise residual
+        rand_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=rand_mask_cond)
+        
+        # L2 loss
+        rand_mask_loss = nn.functional.mse_loss(rand_mask_noise_pred, noise)
+        
+        ### NO MASK ERROR ###
+        # Predict the noise residual
+        no_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=obsgoal_cond)
+        
+        # L2 loss
+        no_mask_loss = nn.functional.mse_loss(no_mask_noise_pred, noise)
+
+        ### GOAL MASK ERROR ###
+        # predict the noise residual
+        goal_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=goal_mask_cond)
+        
+        # L2 loss
+        goal_mask_loss = nn.functional.mse_loss(goal_mask_noise_pred, noise)
+        
+        # Accumulate losses
+        reduced_rand_mask_loss = rand_mask_loss.clone()
+        reduced_no_mask_loss = no_mask_loss.clone()
+        reduced_goal_mask_loss = goal_mask_loss.clone()
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(reduced_rand_mask_loss, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(reduced_no_mask_loss, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(reduced_goal_mask_loss, op=torch.distributed.ReduceOp.SUM)
+            reduced_rand_mask_loss = reduced_rand_mask_loss / torch.distributed.get_world_size()
+            reduced_no_mask_loss = reduced_no_mask_loss / torch.distributed.get_world_size()
+            reduced_goal_mask_loss = reduced_goal_mask_loss / torch.distributed.get_world_size()
             
-            obs_images = torch.split(obs_image, 3, dim=1)
-            batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
-            batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-            batch_obs_images = [transform(obs) for obs in obs_images]
-            batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
-            batch_goal_images = transform(goal_image).to(device)
-            action_mask = action_mask.to(device)
+        rand_mask_loss_list.append(reduced_rand_mask_loss.item())
+        no_mask_loss_list.append(reduced_no_mask_loss.item())
+        goal_mask_loss_list.append(reduced_goal_mask_loss.item())
 
-            B = deltas.shape[0]
-
-            # Generate random goal mask
-            rand_goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
-            goal_mask = torch.ones_like(rand_goal_mask).long().to(device)
-            no_mask = torch.zeros_like(rand_goal_mask).long().to(device)
-
-            rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask)
-
-            obsgoal_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask)
-            obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
-
-            goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
-
-            distance = distance.to(device)
-
-            naction = deltas.to(device).float()
-
-            # Sample noise to add to actions
-            noise = torch.randn(naction.shape, device=device)
-
-            # Sample a diffusion iteration for each data point
-            timesteps = torch.randint(
-                0, noise_scheduler.config.num_train_timesteps,
-                (B,), device=device
-            ).long()
-
-            noisy_actions = noise_scheduler.add_noise(
-                naction, noise, timesteps)
-
-            ### RANDOM MASK ERROR ###
-            # Predict the noise residual
-            rand_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=rand_mask_cond)
-            
-            # L2 loss
-            rand_mask_loss = nn.functional.mse_loss(rand_mask_noise_pred, noise)
-            
-            ### NO MASK ERROR ###
-            # Predict the noise residual
-            no_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=obsgoal_cond)
-            
-            # L2 loss
-            no_mask_loss = nn.functional.mse_loss(no_mask_noise_pred, noise)
-
-            ### GOAL MASK ERROR ###
-            # predict the noise residual
-            goal_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=goal_mask_cond)
-            
-            # L2 loss
-            goal_mask_loss = nn.functional.mse_loss(goal_mask_noise_pred, noise)
-            
-            # Accumulate losses
-            rand_mask_loss_list.append(rand_mask_loss.item())
-            no_mask_loss_list.append(no_mask_loss.item())
-            goal_mask_loss_list.append(goal_mask_loss.item())
-
+        if isinstance(tepoch, tqdm.tqdm):
             tepoch.set_postfix(loss=rand_mask_loss.item())
 
-            # Accumulate metrics for averaging at the end
-            model_output_dict = model_output(
-                ema_model,
-                noise_scheduler,
-                batch_obs_images,
-                batch_goal_images,
-                pred_horizon=deltas.shape[1],
-                action_dim=deltas.shape[2],
-                num_samples=1,
-                device=device,
-            )
-            model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
-                model_output_dict["gc_actions"].flatten(0, 1)
-            ).unflatten(0, (B, -1))
-            model_output_dict["uc_actions"] = unnormalize_data_smpl_pose_gaussian(
-                model_output_dict["uc_actions"].flatten(0, 1)
-            ).unflatten(0, (B, -1))
-            
-            # unnormalize from gaussian for loss metrics and visualizations
-            first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
-            deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
+        # Accumulate metrics for averaging at the end
+        model_output_dict = model_output(
+            ema_model,
+            noise_scheduler,
+            batch_obs_images,
+            batch_goal_images,
+            pred_horizon=deltas.shape[1],
+            action_dim=deltas.shape[2],
+            num_samples=1,
+            device=device,
+        )
+        model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
+            model_output_dict["gc_actions"].flatten(0, 1)
+        ).unflatten(0, (B, -1))
+        model_output_dict["uc_actions"] = unnormalize_data_smpl_pose_gaussian(
+            model_output_dict["uc_actions"].flatten(0, 1)
+        ).unflatten(0, (B, -1))
+        
+        # unnormalize from gaussian for loss metrics and visualizations
+        first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
+        deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
 
-            if i % print_log_freq == 0:
-                metrics = _compute_metrics_nomad(
-                            model_output_dict,
-                            distance.to(device),
-                            deltas.to(device),
-                            action_mask.to(device),
-                        )
-            
-                data_log = {}
-                for key, value in metrics.items():
-                    if key in loggers:
-                        logger = loggers[key]
-                        logger.log_data(value.item())
-                    else:
-                        data_log[f"eval_{key}"] = value.item()
-            
-                for key, logger in loggers.items():
-                    data_log["eval/" + logger.full_name()] = logger.latest()
-                    if i % print_log_freq == 0 and print_log_freq != 0:
-                        print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
+        metrics = _compute_metrics_nomad(
+                    model_output_dict,
+                    distance.to(device),
+                    deltas.to(device),
+                    action_mask.to(device),
+                )
+        
+        if torch.distributed.is_initialized():
+            # Reduce all metrics across ranks by averaging
+            for key, value in metrics.items():
+                torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
+                metrics[key] = value / torch.distributed.get_world_size()
+        
+        data_log = {}
+        for key, value in metrics.items():
+            if key not in loggers:
+                loggers[key] = Logger(key, "eval", window_size=print_log_freq)
+            loggers[key].log_data(value.item())
+            data_log[f"eval/{key}"] = value.item()
+        all_data_logs.append(data_log)
+        
+        if i % print_log_freq == 0:
+            for key, logger in loggers.items():
+                if "segments/" in key:
+                    continue
+                if i % print_log_freq == 0 and print_log_freq != 0 and rank == 0:
+                    print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
 
-                all_data_logs.append(data_log)
-
-            if i == 0:
-                batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
-                batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-                path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
-                os.makedirs(path, exist_ok=True)
-                for idx_ in range(10):
-                    plot_fname = plot_images_and_actions_full_body(
-                        image_plot_dir=path,
-                        name=f"batch{i}_idx{idx_}",
-                        cur_obs_image=batch_viz_obs_images[idx_],
-                        cur_goal_image=batch_viz_goal_images[idx_],
-                        cur_first_pose=first_pose[idx_],
-                        gt_deltas=deltas[idx_],
-                        deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
-                        xsens_skel=XsensSkeleton()
-                    )
-                    if use_wandb:
-                        wandb.log({f"eval_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+        if i == 0 and rank == 0:
+            batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+            batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+            path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
+            os.makedirs(path, exist_ok=True)
+            for idx_ in range(min(10, B)):
+                plot_fname = plot_images_and_actions_full_body(
+                    image_plot_dir=path,
+                    name=f"batch{i}_idx{idx_}",
+                    cur_obs_image=batch_viz_obs_images[idx_],
+                    cur_goal_image=batch_viz_goal_images[idx_],
+                    cur_first_pose=first_pose[idx_],
+                    gt_deltas=deltas[idx_],
+                    deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
+                    xsens_skel=XsensSkeleton()
+                )
+                if use_wandb:
+                    wandb.log({f"eval_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
 
     # At the end, log averaged metrics to wandb
-    if use_wandb:
-        avg_rand_mask_loss = np.mean(rand_mask_loss_list) if rand_mask_loss_list else 0.0
-        avg_no_mask_loss = np.mean(no_mask_loss_list) if no_mask_loss_list else 0.0
-        avg_goal_mask_loss = np.mean(goal_mask_loss_list) if goal_mask_loss_list else 0.0
-
+    if use_wandb and rank == 0:
         # Average all_data_logs if present
         avg_data_log = {}
         if all_data_logs:
@@ -588,6 +580,10 @@ def evaluate_nomad(
                 vals = [d[key] for d in all_data_logs if key in d]
                 if vals:
                     avg_data_log[key] = float(np.mean(vals))
+
+        avg_rand_mask_loss = np.mean(rand_mask_loss_list) if rand_mask_loss_list else 0.0
+        avg_no_mask_loss = np.mean(no_mask_loss_list) if no_mask_loss_list else 0.0
+        avg_goal_mask_loss = np.mean(goal_mask_loss_list) if goal_mask_loss_list else 0.0
 
         # Add the diffusion losses
         avg_data_log["eval/diffusion_loss (random masking)"] = avg_rand_mask_loss

@@ -177,10 +177,16 @@ def main(rank, world_size, config):
         config["eval_batch_size"] = config["batch_size"]
 
     for dataset_type, dataset in test_dataloaders.items():
+        sampler = DistributedSampler(
+            dataset, 
+            num_replicas=world_size, 
+            rank=rank,
+            shuffle=False
+        )
         test_dataloaders[dataset_type] = DataLoader(
             dataset,
             batch_size=config["eval_batch_size"],
-            shuffle=False,  # No shuffling for test data
+            sampler=sampler,  # Use DistributedSampler instead of shuffle
             num_workers=config['num_workers'],
             drop_last=False,
         )
@@ -338,6 +344,7 @@ def main(rank, world_size, config):
         use_wandb=config["use_wandb"],
         eval_fraction=config["eval_fraction"],
         eval_freq=config["eval_freq"],
+        rank=rank,
     )
 
     if rank == 0:
@@ -389,7 +396,11 @@ if __name__ == "__main__":
         exist_ok=True,
     )
 
-    if config["use_wandb"]:
+    print(config)
+    
+    world_size, rank, gpu, _ = init_distributed(rank_and_world_size=(None, args.world_size))
+    
+    if config["use_wandb"] and rank == 0:
         # wandb.login()
         wandb.init(
             project=config["project_name"],
@@ -401,10 +412,8 @@ if __name__ == "__main__":
         # update the wandb args with the training configurations
         if wandb.run:
             wandb.config.update(config)
-
-    print(config)
     
-    world_size, rank, gpu, _ = init_distributed(rank_and_world_size=(None, args.world_size))
+    torch.cuda.set_device(gpu)
     
     main(rank, world_size, config)
 

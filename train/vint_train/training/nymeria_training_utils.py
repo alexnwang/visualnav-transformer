@@ -249,8 +249,8 @@ def plot_images_and_actions_full_body(image_plot_dir, # save location
     plot_f = os.path.join(image_plot_dir, f'{name}_full_body_traj.gif')
     cur_first_pose = cur_first_pose[None]
     
-    viz_obs_image = cur_obs_image.detach().cpu().permute(1, 2, 0).numpy()
-    viz_goal_image = cur_goal_image.detach().cpu().permute(1, 2, 0).numpy()
+    viz_obs_image = cur_obs_image.detach().cpu().permute(1, 2, 0).numpy().clip(0, 1)
+    viz_goal_image = cur_goal_image.detach().cpu().permute(1, 2, 0).numpy().clip(0, 1)
     
     deltas = {k: v.detach().cpu() for k, v in deltas.items()}
     pred_actions = {k: get_action_smpl_torch(cur_first_pose, v.unsqueeze(0), XSensConstants.upper_body_num_parts)[0].detach().cpu() for k, v in deltas.items()}

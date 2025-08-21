@@ -39,6 +39,7 @@ def train_eval_loop_nomad(
     use_wandb: bool = True,
     eval_fraction: float = 0.25,
     eval_freq: int = 1,
+    rank: int = 0,
 ):
     """
     Train and evaluate the model for several epochs (vint or gnm models)
@@ -91,30 +92,33 @@ def train_eval_loop_nomad(
                 use_wandb=use_wandb,
                 alpha=alpha,
                 lr_scheduler=lr_scheduler,
+                rank=rank,
             )
             # lr_scheduler.step()
 
-        numbered_path = os.path.join(project_folder, f"ema_{epoch}.pth")
-        torch.save(ema_model.averaged_model.state_dict(), numbered_path)
-        numbered_path = os.path.join(project_folder, f"ema_latest.pth")
-        print(f"Saved EMA model to {numbered_path}")
+        if rank == 0:
+            numbered_path = os.path.join(project_folder, f"ema_{epoch}.pth")
+            torch.save(ema_model.averaged_model.state_dict(), numbered_path)
+            numbered_path = os.path.join(project_folder, f"ema_latest.pth")
+            print(f"Saved EMA model to {numbered_path}")
 
-        numbered_path = os.path.join(project_folder, f"{epoch}.pth")
-        torch.save(model.state_dict(), numbered_path)
-        torch.save(model.state_dict(), latest_path)
-        print(f"Saved model to {numbered_path}")
+            numbered_path = os.path.join(project_folder, f"{epoch}.pth")
+            torch.save(model.state_dict(), numbered_path)
+            torch.save(model.state_dict(), latest_path)
+            print(f"Saved model to {numbered_path}")
 
-        # save optimizer
-        numbered_path = os.path.join(project_folder, f"optimizer_{epoch}.pth")
-        latest_optimizer_path = os.path.join(project_folder, f"optimizer_latest.pth")
-        torch.save(optimizer.state_dict(), latest_optimizer_path)
+            # save optimizer
+            numbered_path = os.path.join(project_folder, f"optimizer_{epoch}.pth")
+            latest_optimizer_path = os.path.join(project_folder, f"optimizer_latest.pth")
+            torch.save(optimizer.state_dict(), latest_optimizer_path)
+            print(f"Saved optimizer to {latest_optimizer_path}")
 
-        # save scheduler
-        numbered_path = os.path.join(project_folder, f"scheduler_{epoch}.pth")
-        latest_scheduler_path = os.path.join(project_folder, f"scheduler_latest.pth")
-        torch.save(lr_scheduler.state_dict(), latest_scheduler_path)
-
-
+            # save scheduler
+            numbered_path = os.path.join(project_folder, f"scheduler_{epoch}.pth")
+            latest_scheduler_path = os.path.join(project_folder, f"scheduler_latest.pth")
+            torch.save(lr_scheduler.state_dict(), latest_scheduler_path)
+            print(f"Saved scheduler to {latest_scheduler_path}")
+            
         if (epoch + 1) % eval_freq == 0: 
             for dataset_type in test_dataloaders:
                 print(
@@ -136,24 +140,12 @@ def train_eval_loop_nomad(
                     wandb_log_freq=wandb_log_freq,
                     use_wandb=use_wandb,
                     eval_fraction=eval_fraction,
+                    rank=rank
                 )
-        wandb.log({
-            "lr": optimizer.param_groups[0]["lr"],
-        }, commit=False)
-
-        # if lr_scheduler is not None:
-        #     lr_scheduler.step()
-
-        # log average eval loss
-        wandb.log({}, commit=False)
-
-        wandb.log({
-            "lr": optimizer.param_groups[0]["lr"],
-        }, commit=False)
-
         
     # Flush the last set of eval logs
-    wandb.log({})
+    if use_wandb and rank == 0:
+        wandb.log({})
     print()
 
 def load_model(model, model_type, checkpoint: dict) -> None:

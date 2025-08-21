@@ -30,7 +30,6 @@ from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1
 
 from vint_train.data.vint_dataset import ViNT_Dataset, ViNT_Nymeria_Dataset
 from vint_train.training.train_eval_loop import (
-    train_eval_loop,
     train_eval_loop_nomad,
     load_model,
 )
