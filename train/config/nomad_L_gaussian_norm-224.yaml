@@ -4,7 +4,7 @@ run_name: nomad_L_gaussian_norm-224
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
 train: True
-batch_size: 128
+batch_size: 32
 epochs: 30
 gpu_ids: [0]
 num_workers: 12
@@ -129,6 +129,6 @@ num_images_log: 8 #0
 pairwise_test_freq: 0 # in epochs
 eval_fraction: 0.25
 wandb_log_freq: 50 # in iterations
-eval_freq: 1 # in epochs
+eval_freq: 3 # in epochs
 
 eval_batch_size: 128

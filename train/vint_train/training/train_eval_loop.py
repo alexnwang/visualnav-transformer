@@ -69,10 +69,10 @@ def train_eval_loop_nomad(
     latest_path = os.path.join(project_folder, f"latest.pth")
     ema_model = EMAModel(model=model,power=0.75)
     
-    for epoch in range(current_epoch, current_epoch + epochs):
+    for epoch in range(current_epoch, epochs):
         if train_model:
             print(
-            f"Start ViNT DP Training Epoch {epoch}/{current_epoch + epochs - 1}"
+            f"Start ViNT DP Training Epoch {epoch}/{epochs - 1}"
             )
             train_nomad(
                 model=model,

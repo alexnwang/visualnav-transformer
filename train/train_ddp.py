@@ -74,6 +74,7 @@ def init_distributed(port=37124, rank_and_world_size=(None, None)):
         rank=rank,
         init_method=dist_url
     )
+    print("initialized distributed process group")
 
     # setup_for_distributed(rank == 0)
     return world_size, rank, gpu, True
@@ -92,7 +93,7 @@ def main(rank, world_size, config):
     if "seed" in config:
         np.random.seed(config["seed"])
         torch.manual_seed(config["seed"])
-        cudnn.deterministic = True
+        # cudnn.deterministic = True
 
     cudnn.benchmark = True  # good if input sizes don't vary
     transform = ([
@@ -101,6 +102,7 @@ def main(rank, world_size, config):
     transform = transforms.Compose(transform)
 
     # Load the data
+    print("Loading data...")
     train_dataset = []
     test_dataloaders = {}
 
@@ -189,8 +191,10 @@ def main(rank, world_size, config):
             sampler=sampler,  # Use DistributedSampler instead of shuffle
             num_workers=config['num_workers'],
             drop_last=False,
+            persistent_workers=False
         )
 
+    print("Creating model...")
     # Create the model
     vision_encoder = NoMaD_ViNT(
         obs_encoder=config["obs_encoder"],
@@ -234,14 +238,18 @@ def main(rank, world_size, config):
                     grad, -1 * config["max_norm"], config["max_norm"]
                 )
             )
+    print("Moving model to device and wrapping with DDP...")
 
     # Move model to device first
     model = model.to(device)
+    print(f"model moved to device {device}")
 
     # Wrap model with DDP
     model_without_ddp = model
-    model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+    model = DDP(model, device_ids=[rank])
+    print("ddp model created")
     model._set_static_graph()
+    print("model set to static graph")
 
     lr = float(config["lr"])
     config["optimizer"] = config["optimizer"].lower()
@@ -291,17 +299,6 @@ def main(rank, world_size, config):
                 after_scheduler=scheduler,
             )
 
-    current_epoch = 0
-    if "load_run" in config:
-        load_project_folder = os.path.join("logs", config["load_run"])
-        if rank == 0:
-            print("Loading model from ", load_project_folder)
-        latest_path = os.path.join(load_project_folder, "latest.pth")
-        latest_checkpoint = torch.load(latest_path, map_location=device)
-        load_model(model.module, config["model_type"], latest_checkpoint)  # Use model.module for DDP
-        if "epoch" in latest_checkpoint:
-            current_epoch = latest_checkpoint["epoch"] + 1
-
     if rank == 0:
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of trainable parameters in model: {num_params}")
@@ -313,7 +310,20 @@ def main(rank, world_size, config):
             print(f"Number of trainable parameters in noise_pred_net: {num_noise_pred_net_params}")
             print(f"Number of trainable parameters in dist_pred_network: {num_dist_pred_net_params}")
 
-    if "load_run" in config:  # load optimizer and scheduler after DDP
+    current_epoch = 0
+    if "load_run" in config:
+        load_project_folder = os.path.join("logs", config["load_run"])
+        print("Loading model from ", load_project_folder)
+        latest_path = os.path.join(load_project_folder, "latest.pth")
+        latest_checkpoint = torch.load(latest_path, map_location=device)
+        load_model(model.module, config["model_type"], latest_checkpoint)  # Use model.module for DDP
+        if "epoch" in latest_checkpoint:
+            current_epoch = latest_checkpoint["epoch"] + 1
+        else:
+            epochs = [x for x in os.listdir(load_project_folder) if "epoch_" in x]
+            current_epoch = max(int(epoch.split("_")[-1]) for epoch in epochs)
+        print(f"Loaded model from epoch {current_epoch}")
+
         if "optimizer" in latest_checkpoint:
             optimizer.load_state_dict(latest_checkpoint["optimizer"].state_dict())
         if scheduler is not None and "scheduler" in latest_checkpoint:
@@ -382,23 +392,25 @@ if __name__ == "__main__":
         user_config = yaml.safe_load(f)
 
     config.update(user_config)
+    world_size, rank, gpu, _ = init_distributed()
 
     # config["run_name"] += "_" + time.strftime("%Y_%m_%d_%H_%M_%S")
-    config["run_name"] = time.strftime("%Y_%m_%d_%H_%M_%S") + ":" + config["run_name"]
+    # for ddp cannot use seconds.
+    config["run_name"] = time.strftime("%Y_%m_%d_%H_%M") + ":" + config["run_name"]
     config["project_folder"] = os.path.join(
         "logs", config["project_name"], config["run_name"]
     )
     
-    os.makedirs(
-        config[
-            "project_folder"
-        ],  # should error if dir already exists to avoid overwriting and old project,
-        exist_ok=True,
-    )
+    if rank == 0:
+        os.makedirs(
+            config[
+                "project_folder"
+            ],  # should error if dir already exists to avoid overwriting and old project,
+            exist_ok=True,
+        )
 
-    print(config)
+        print(config)
     
-    world_size, rank, gpu, _ = init_distributed(rank_and_world_size=(None, args.world_size))
     
     if config["use_wandb"] and rank == 0:
         # wandb.login()
