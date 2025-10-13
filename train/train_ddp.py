@@ -36,7 +36,6 @@ from vint_train.training.train_eval_loop import (
 
 def init_distributed(port=37124, rank_and_world_size=(None, None)):
     rank, world_size = rank_and_world_size
-    dist_url='env://'
     os.environ['MASTER_PORT'] = os.environ.get('MASTER_PORT', str(port))
     print("Using port", os.environ['MASTER_PORT'])
 
@@ -72,7 +71,7 @@ def init_distributed(port=37124, rank_and_world_size=(None, None)):
         backend='nccl',
         world_size=world_size,
         rank=rank,
-        init_method=dist_url
+        device_id=gpu,
     )
     print("initialized distributed process group")
 
@@ -102,7 +101,6 @@ def main(rank, world_size, config):
     transform = transforms.Compose(transform)
 
     # Load the data
-    print("Loading data...")
     train_dataset = []
     test_dataloaders = {}
 
@@ -206,10 +204,14 @@ def main(rank, world_size, config):
         pool_features=config.get("pool_features", True),
     )
     vision_encoder = replace_bn_with_gn(vision_encoder)
-        
+    
+    global_cond_dim = config["encoding_size"]
+    if config.get("proprioception", False):
+        global_cond_dim += 45
+    
     noise_pred_net = ConditionalUnet1D(
             input_dim=config['input_dims'],
-            global_cond_dim=config["encoding_size"],
+            global_cond_dim=global_cond_dim,
             down_dims=config["down_dims"],
             cond_predict_scale=config["cond_predict_scale"],
         )
@@ -238,18 +240,16 @@ def main(rank, world_size, config):
                     grad, -1 * config["max_norm"], config["max_norm"]
                 )
             )
-    print("Moving model to device and wrapping with DDP...")
 
     # Move model to device first
     model = model.to(device)
-    print(f"model moved to device {device}")
+    print(f"model moved to device {device}, wrapping with ddp")
 
     # Wrap model with DDP
     model_without_ddp = model
     model = DDP(model, device_ids=[rank])
-    print("ddp model created")
+    print(f"rank {rank} ddp model created")
     model._set_static_graph()
-    print("model set to static graph")
 
     lr = float(config["lr"])
     config["optimizer"] = config["optimizer"].lower()
@@ -335,6 +335,7 @@ def main(rank, world_size, config):
     train_eval_loop_nomad(
         train_model=config["train"],
         model=model,
+        proprioception=config.get("proprioception", False),
         optimizer=optimizer,
         lr_scheduler=scheduler,
         noise_scheduler=noise_scheduler,

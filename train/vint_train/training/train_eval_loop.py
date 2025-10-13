@@ -20,6 +20,7 @@ from diffusers.training_utils import EMAModel
 def train_eval_loop_nomad(
     train_model: bool,
     model: nn.Module,
+    proprioception: bool,
     optimizer: Adam, 
     lr_scheduler: torch.optim.lr_scheduler._LRScheduler,
     noise_scheduler: DDPMScheduler,
@@ -77,6 +78,7 @@ def train_eval_loop_nomad(
             train_nomad(
                 model=model,
                 ema_model=ema_model,
+                proprioception=proprioception,
                 optimizer=optimizer,
                 dataloader=train_loader,
                 transform=transform,
@@ -128,6 +130,7 @@ def train_eval_loop_nomad(
                 evaluate_nomad(
                     eval_type=dataset_type,
                     ema_model=ema_model,
+                    proprioception=proprioception,
                     dataloader=loader,
                     transform=transform,
                     device=device,

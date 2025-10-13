@@ -423,7 +423,6 @@ class NymeriaMixin:
         if gaussian_normalization_stats_path is not None:
             f = None
             try:
-                print("attempting to load action stats for normalization to N(0,1)")
                 f = open(gaussian_normalization_stats_path)
             except FileNotFoundError:
                 print("action stats not found, using default values")
