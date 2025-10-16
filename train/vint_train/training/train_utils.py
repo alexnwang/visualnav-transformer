@@ -194,11 +194,12 @@ def train_nomad(
                     
         obs_images = torch.split(obs_image, 3, dim=1)
         batch_obs_images = [transform(obs) for obs in obs_images]
-        batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
+        batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device, non_blocking=True)
         batch_goal_images = transform(goal_image).to(device, non_blocking=True)
         action_mask = action_mask.to(device, non_blocking=True)
         distance = distance.float().to(device, non_blocking=True)
         naction = deltas.to(device, non_blocking=True).float()
+        joint_angles = first_pose[:, 0, 3:].to(device, non_blocking=True)
 
         B = deltas.shape[0]
 
@@ -211,7 +212,6 @@ def train_nomad(
         dist_loss = (dist_loss * (1 - goal_mask.float())).mean() / (1e-2 +(1 - goal_mask.float()).mean())
 
         if proprioception:
-            joint_angles = first_pose[:, 0, 3:].to(device)
             obsgoal_cond = torch.cat([obsgoal_cond, joint_angles], dim=1)
 
         # Sample noise to add to actions
@@ -251,43 +251,14 @@ def train_nomad(
 
         # Update Exponential Moving Average of the model weights
         ema_model.step(model)
-
-        # Logging
-        loss_cpu = loss.item()
-        if isinstance(tepoch, tqdm.tqdm):   
-            tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
-
-
-        reduced_loss = loss.clone()
-        reduced_dist_loss = dist_loss.clone()
-        reduced_diffusion_loss = diffusion_loss.clone()
         
-        if torch.distributed.is_initialized():
-            torch.distributed.all_reduce(reduced_loss, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(reduced_dist_loss, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(reduced_diffusion_loss, op=torch.distributed.ReduceOp.SUM)
-            reduced_loss = reduced_loss / torch.distributed.get_world_size()
-            reduced_dist_loss = reduced_dist_loss / torch.distributed.get_world_size()
-            reduced_diffusion_loss = reduced_diffusion_loss / torch.distributed.get_world_size()
-            
-        if use_wandb and i % wandb_log_freq == 0 and rank == 0:
-            wandb.log({"total_loss": reduced_loss}, commit=False)
-            wandb.log({"dist_loss": reduced_dist_loss}, commit=False)
-            wandb.log({"diffusion_loss": reduced_diffusion_loss}, commit=False)
-            wandb.log({"lr": optimizer.param_groups[0]["lr"]}, commit=False)
-
+        # In-step evaluations
         if i % print_log_freq == 0 or (image_log_freq != 0 and i % image_log_freq == 0):
             model_output_dict = model_output(
-                ema_model.averaged_model,
-                proprioception,
-                noise_scheduler,
-                batch_obs_images,
-                batch_goal_images,
-                first_pose,
-                pred_horizon=deltas.shape[1],
-                action_dim=deltas.shape[2],
-                num_samples=1,
-                device=device,
+                ema_model.averaged_model, proprioception, noise_scheduler,
+                batch_obs_images, batch_goal_images, first_pose,
+                pred_horizon=deltas.shape[1], action_dim=deltas.shape[2],
+                num_samples=1,device=device,
             )
             model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
                 model_output_dict["gc_actions"].flatten(0, 1)
@@ -300,13 +271,9 @@ def train_nomad(
             first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
             deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
         
+            # Compute metrics
             if i % print_log_freq == 0:
-                metrics = _compute_metrics_nomad(
-                            model_output_dict,
-                            distance.to(device),
-                            deltas.to(device),
-                            action_mask.to(device),
-                        )
+                metrics = _compute_metrics_nomad(model_output_dict, distance.to(device), deltas.to(device), action_mask.to(device))
                 
                 if torch.distributed.is_initialized():
                     # Reduce all metrics across ranks by averaging
@@ -349,6 +316,31 @@ def train_nomad(
                     )
                     if use_wandb and i % wandb_log_freq == 0:
                         wandb.log({f"train_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+
+        # logging
+        reduced_loss = loss.clone()
+        reduced_dist_loss = dist_loss.clone()
+        reduced_diffusion_loss = diffusion_loss.clone()
+        
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(reduced_loss, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(reduced_dist_loss, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(reduced_diffusion_loss, op=torch.distributed.ReduceOp.SUM)
+            reduced_loss = reduced_loss / torch.distributed.get_world_size()
+            reduced_dist_loss = reduced_dist_loss / torch.distributed.get_world_size()
+            reduced_diffusion_loss = reduced_diffusion_loss / torch.distributed.get_world_size()
+            
+        if use_wandb and i % wandb_log_freq == 0 and rank == 0:
+            wandb.log({
+                "total_loss": reduced_loss,
+                "dist_loss": reduced_dist_loss,
+                "diffusion_loss": reduced_diffusion_loss,
+                "lr": optimizer.param_groups[0]["lr"]
+            })
+            
+        if isinstance(tepoch, tqdm.tqdm):   
+            tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
+                        
         if use_wandb and (i % wandb_log_freq == 0 or i % image_log_freq == 0 or i % print_log_freq == 0) and rank == 0:
             wandb.log({}, commit=True)  # Commit the batch log to wandb
 

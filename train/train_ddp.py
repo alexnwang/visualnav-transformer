@@ -363,7 +363,7 @@ def main(rank, world_size, config):
 
 
 if __name__ == "__main__":
-    torch.multiprocessing.set_start_method("spawn")
+    # torch.multiprocessing.set_start_method("spawn")
 
     parser = argparse.ArgumentParser(description="Visual Navigation Transformer with DDP")
 
@@ -414,10 +414,10 @@ if __name__ == "__main__":
     
     
     if config["use_wandb"] and rank == 0:
-        # wandb.login()
+        wandb.login()
         wandb.init(
             project=config["project_name"],
-            settings=wandb.Settings(start_method="fork"),
+            # settings=wandb.Settings(start_method="fork"),
             entity="alexandernwang", # TODO: change this to your wandb entity
         )
         wandb.save(args.config, policy="now")  # save the config file
