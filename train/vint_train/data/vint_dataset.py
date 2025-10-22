@@ -36,7 +36,7 @@ class ViNT_Dataset(Dataset):
         max_dist_cat: int,
         min_action_distance: int,
         max_action_distance: int,
-        negative_mining: bool,
+        negative_goals: bool,
         len_traj_pred: int,
         learn_angle: bool,
         context_size: int,
@@ -57,7 +57,7 @@ class ViNT_Dataset(Dataset):
             waypoint_spacing (int): Spacing between waypoints
             min_dist_cat (int): Minimum distance category to use
             max_dist_cat (int): Maximum distance category to use
-            negative_mining (bool): Whether to use negative mining from the ViNG paper (Shah et al.) (https://arxiv.org/abs/2012.09812)
+            negative_goals (bool): Whether to use negative goal times
             len_traj_pred (int): Length of trajectory of waypoints to predict if this is an action dataset
             learn_angle (bool): Whether to learn the yaw of the robot at each predicted waypoint if this is an action dataset
             context_size (int): Number of previous observations to use as context
@@ -85,9 +85,7 @@ class ViNT_Dataset(Dataset):
         )
         self.min_dist_cat = self.distance_categories[0]
         self.max_dist_cat = self.distance_categories[-1]
-        self.negative_mining = negative_mining
-        if self.negative_mining:
-            self.distance_categories.append(-1)
+        self.negative_goals = negative_goals
         self.len_traj_pred = len_traj_pred
         self.learn_angle = learn_angle
 
@@ -213,7 +211,11 @@ class ViNT_Dataset(Dataset):
         Sample a goal from the future in the same trajectory.
         Returns: (trajectory_name, goal_time, goal_is_negative)
         """
-        goal_offset = np.random.randint(0, max_goal_dist + 1)
+        if self.negative_goals:
+            goal_offset = np.random.randint(0, max_goal_dist + 1)
+        else:
+            goal_offset = np.random.randint(1, max_goal_dist + 1)
+        
         if goal_offset == 0:
             trajectory_name, goal_time = self._sample_negative()
             return trajectory_name, goal_time, True

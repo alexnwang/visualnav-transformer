@@ -113,8 +113,8 @@ def main(rank, world_size, config):
     assert len(config['datasets']) == 1, "Currently only one dataset is supported to enable unnormalization of rpy angles for graphing."
     for dataset_name in config["datasets"]:
         data_config = config["datasets"][dataset_name]
-        if "negative_mining" not in data_config:
-            data_config["negative_mining"] = True
+        if "negative_goals" not in data_config:
+            data_config["negative_goals"] = True
         if "goals_per_obs" not in data_config:
             data_config["goals_per_obs"] = 1
         if "end_slack" not in data_config:
@@ -134,7 +134,7 @@ def main(rank, world_size, config):
                     max_dist_cat=config["distance"]["max_dist_cat"],
                     min_action_distance=config["action"]["min_dist_cat"],
                     max_action_distance=config["action"]["max_dist_cat"],
-                    negative_mining=data_config["negative_mining"],
+                    negative_goals=data_config["negative_goals"],
                     len_traj_pred=config["len_traj_pred"],
                     learn_angle=config["learn_angle"],
                     context_size=config["context_size"],
@@ -416,7 +416,7 @@ if __name__ == "__main__":
     if config["use_wandb"] and rank == 0:
         wandb.login()
         wandb.init(
-            project=config["project_name"],
+            project="nomad",
             # settings=wandb.Settings(start_method="fork"),
             entity="alexandernwang", # TODO: change this to your wandb entity
         )

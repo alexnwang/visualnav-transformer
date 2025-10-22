@@ -4,12 +4,81 @@ import os
 from typing import Optional
 import imageio
 from matplotlib import pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 
 import torch
 
 from mpl_toolkits.mplot3d.axes3d import Axes3D
 from vint_train.data.misc import XSensConstants
+
+def plot_skeleton(body, rotmats=None, points=None, size=1, xlim=None, ylim=None, zlim=None):
+    """
+    Plot the skeleton of the body
+    body: (num_joints, 3) or (num_samples, num_joints, 3)
+    rotmats: (num_joints, 3) or (num_samples, num_joints, 3)
+    points: (N, 3)
+    size: size of the plot
+    
+    Returns:
+    pil_img: PIL image
+    """
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    
+    if body.ndim == 2:
+        body = body[None]
+        if rotmats is not None:
+            rotmats = rotmats[None]
+    
+    N = body.shape[0]
+    
+    if N == 1:
+        colors = [XSensConstants.color_skeleton[:XSensConstants.upper_body_num_parts]]
+    elif N > 1:
+        # one color for each body
+        # Use matplotlib's color cycle to assign one color per body for N > 1
+        color_cycle = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        colors = [
+            255. * np.tile(
+                np.array(mcolors.to_rgb(color_cycle[i % len(color_cycle)])),
+                (XSensConstants.upper_body_num_parts, 1)
+            ) for i in range(N)
+        ]
+    
+    for i in range(N):
+        plot_trajs_and_points_full_body(
+            ax,
+            body[i],
+            rotmats[i] if rotmats is not None else None,
+            XSensConstants.kintree_parents[:XSensConstants.upper_body_num_parts],
+            colors[i],
+            size=size,
+        )
+    
+    if points is not None:
+        points = np.asarray(points)
+        if points.ndim == 1:
+            points = points[None, :]
+        ax.scatter(points[:, 0], points[:, 1], points[:, 2], c='r', s=30, marker='*')
+    
+    if xlim is not None:
+        curr_xlim = ax.get_xlim()
+        ax.set_xlim(min(curr_xlim[0], xlim[0]), max(curr_xlim[1], xlim[1]))
+    if ylim is not None:
+        curr_ylim = ax.get_ylim()
+        ax.set_ylim(min(curr_ylim[0], ylim[0]), max(curr_ylim[1], ylim[1]))
+    if zlim is not None:
+        curr_zlim = ax.get_zlim()
+        ax.set_zlim(min(curr_zlim[0], zlim[0]), max(curr_zlim[1], zlim[1]))
+    
+    buf = BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0., dpi=300)
+    buf.seek(0)
+    pil_img = Image.open(buf)
+    plt.close(fig)
+    return pil_img
+
 
 def unnormalize(image_tensor):
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
