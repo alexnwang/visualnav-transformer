@@ -32,6 +32,7 @@ dependencies:
   - pillow
   - scipy==1.15.3
   - matplotlib
+  - imageio
 
 
 
