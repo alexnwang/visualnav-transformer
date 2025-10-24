@@ -4,7 +4,7 @@ run_name: test
 # training setup
 use_wandb: False # set to false if you don't want to log to wandb
 train: True
-batch_size: 32
+batch_size: 64
 epochs: 30
 gpu_ids: [0]
 num_workers: 0

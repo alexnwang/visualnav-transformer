@@ -1,10 +1,10 @@
-project_name: nomad
-run_name: proprioception_L_gaussian_norm-224-ctxt1
+project_name: nomad-minimal
+run_name: overfit
 
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
 train: True
-batch_size: 128
+batch_size: 64
 epochs: 30
 gpu_ids: [0]
 num_workers: 16
@@ -45,7 +45,7 @@ normalize: True
 
 # context
 context_type: temporal
-context_size: 1 # 5
+context_size: 3 # 5
 alpha: 1e-4
 
 # distance bounds for distance and action and distance predictions 
@@ -64,9 +64,10 @@ learn_angle: False
 image_size: [224, 224] # width, height
 datasets:
   nymeria:
+    repeat: 100
     data_folder: /scratch/anw2067/nymeria
-    train: data_splits/nymeria/train/
-    test: data_splits/nymeria/test/
+    train: data_splits/nymeria_singleton/train/
+    test: data_splits/nymeria_singleton/test/
     action_stats:
       min: [-2.5, -2.5, -2.5, -3.14159, -3.14159, -3.14159]
       max: [1.5, 1.5, 1.5, 3.14159, 3.14159, 3.14159]
@@ -74,7 +75,7 @@ datasets:
 
 # logging stuff
 ## =0 turns off
-print_log_freq: 500 # in iterations
+print_log_freq: 100 # in iterations
 image_log_freq: 1000 #0 # in iterations
 num_images_log: 8 #0 
 pairwise_test_freq: 0 # in epochs

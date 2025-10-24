@@ -145,6 +145,10 @@ def main(rank, world_size, config):
                     goal_type=config["goal_type"],
                     gaussian_normalization_stats_path= data_config.get("gaussian_normalization_stats_path", None),
                 )
+                
+                if data_config.get("repeat", 1) > 1:
+                    dataset = ConcatDataset([dataset] * data_config.get("repeat", 1))
+                
                 if data_split_type == "train":
                     train_dataset.append(dataset)
                 else:
