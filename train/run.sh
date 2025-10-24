@@ -11,6 +11,8 @@ echo "Starting DDP training with $NUM_GPUS GPUs"
 echo "Config file: $CONFIG_FILE"
 echo "World size: $NUM_GPUS"
 
+export NCCL_P2P_DISABLE=1
+
 # Run with torchrun
 torchrun \
     --nproc_per_node=$NUM_GPUS \
