@@ -206,6 +206,7 @@ def main(rank, world_size, config):
         mha_num_attention_layers=config["mha_num_attention_layers"],
         mha_ff_dim_factor=config["mha_ff_dim_factor"],
         pool_features=config.get("pool_features", True),
+        image_size=config["image_size"],
     )
     vision_encoder = replace_bn_with_gn(vision_encoder)
     
@@ -415,6 +416,7 @@ if __name__ == "__main__":
         )
 
         print(config)
+        yaml.dump(config, open(os.path.join(config["project_folder"], "config.yaml"), "w"))
     
     
     if config["use_wandb"] and rank == 0:

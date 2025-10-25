@@ -1,5 +1,5 @@
 project_name: nomad-minimal
-run_name: overfit
+run_name: overfit-8steps
 
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
@@ -51,10 +51,10 @@ alpha: 1e-4
 # distance bounds for distance and action and distance predictions 
 distance:
   min_dist_cat: 0
-  max_dist_cat: 20
+  max_dist_cat: 8
 action:
   min_dist_cat: 0
-  max_dist_cat: 20
+  max_dist_cat: 8
 
 # action output params
 len_traj_pred: 8

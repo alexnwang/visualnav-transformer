@@ -15,7 +15,8 @@ class NoMaD_ViNT(nn.Module):
         mha_num_attention_heads: Optional[int] = 2,
         mha_num_attention_layers: Optional[int] = 2,
         mha_ff_dim_factor: Optional[int] = 4,
-        pool_features: Optional[bool] = True
+        pool_features: Optional[bool] = True,
+        image_size: Optional[Tuple[int, int]] = (224, 224)
     ) -> None:
         """
         NoMaD ViNT Encoder class
@@ -55,7 +56,8 @@ class NoMaD_ViNT(nn.Module):
         if self.pool_features:
             self.positional_encoding = PositionalEncoding(self.obs_encoding_size, max_seq_len=self.context_size + 2)
         else:
-            self.positional_encoding = PositionalEncoding(self.obs_encoding_size, max_seq_len=(self.context_size + 2) * 9)
+            num_patches = (image_size[0] // 32) * (image_size[1] // 32)
+            self.positional_encoding = PositionalEncoding(self.obs_encoding_size, max_seq_len=(self.context_size + 2) * num_patches)
         self.sa_layer = nn.TransformerEncoderLayer(
             d_model=self.obs_encoding_size, 
             nhead=mha_num_attention_heads, 

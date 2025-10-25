@@ -7,10 +7,16 @@
 #SBATCH --time=36:00:00
 #SBATCH --mem=200GB
 #SBATCH --job-name=nomad
-#SBATCH --output=/home/anw2067/slurm_logs/proprioception_L_gaussian_norm-224-ctxt1-%j.out
-#SBATCH --error=/home/anw2067/slurm_logs/proprioception_L_gaussian_norm-224-ctxt1-%j.err
+#SBATCH --output=/home/anw2067/slurm_logs/nomad-%j.out
+#SBATCH --error=/home/anw2067/slurm_logs/nomad-%j.err
 
 cd /home/anw2067/visualnav-transformer/train
+
+# ./torch_run.sh config/torch/minimal-overfit.yaml 4
+# ./torch_run.sh config/torch/minimal-overfit-8steps.yaml 4
+# ./torch_run.sh config/torch/minimal-overfit-8steps-proprioception.yaml 4
+./torch_run.sh config/torch/minimal-nomad-proprioception-nopool.yaml 4
+
 
 # ./torch_run.sh config/torch/minimal-nomad-lr1e-3.yaml 4
 # ./torch_run.sh config/torch/minimal-nomad-4_12-alpha0.yaml 4

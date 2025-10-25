@@ -1,5 +1,5 @@
 project_name: nomad-minimal
-run_name: overfit
+run_name: overfit-proprioception-nopool
 
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
@@ -22,9 +22,10 @@ seed: 0
 
 # model params
 model_type: nomad
+pool_features: False
 vision_encoder: nomad_vint
 encoding_size: 384
-proprioception: False
+proprioception: True
 obs_encoder: efficientnet-b0
 attn_unet: False
 cond_predict_scale: False
@@ -53,7 +54,7 @@ distance:
   min_dist_cat: 0
   max_dist_cat: 20
 action:
-  min_dist_cat: 0
+  min_dist_cat: 3
   max_dist_cat: 20
 
 # action output params

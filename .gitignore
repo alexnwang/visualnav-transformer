@@ -5,6 +5,8 @@ train/wandb/*
 train/gnm_dataset/*
 *_test.yaml
 dataset*.pkl
+slurm_logs
+train/logs
 
 *.png
 *.jpg

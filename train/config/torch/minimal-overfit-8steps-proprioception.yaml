@@ -1,5 +1,5 @@
 project_name: nomad-minimal
-run_name: overfit
+run_name: overfit-8steps-proprioception
 
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
@@ -24,7 +24,7 @@ seed: 0
 model_type: nomad
 vision_encoder: nomad_vint
 encoding_size: 384
-proprioception: False
+proprioception: True
 obs_encoder: efficientnet-b0
 attn_unet: False
 cond_predict_scale: False
@@ -51,10 +51,10 @@ alpha: 1e-4
 # distance bounds for distance and action and distance predictions 
 distance:
   min_dist_cat: 0
-  max_dist_cat: 20
+  max_dist_cat: 8
 action:
   min_dist_cat: 0
-  max_dist_cat: 20
+  max_dist_cat: 8
 
 # action output params
 len_traj_pred: 8
