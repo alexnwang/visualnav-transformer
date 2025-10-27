@@ -12,10 +12,13 @@
 
 cd /home/anw2067/visualnav-transformer/train
 
+# ./torch_run.sh config/torch/minimal-nomad-proprioception-pred4.yaml 4
+./torch_run.sh config/torch/minimal-nomad-proprioception-pred2.yaml 4
+
 # ./torch_run.sh config/torch/minimal-overfit.yaml 4
 # ./torch_run.sh config/torch/minimal-overfit-8steps.yaml 4
 # ./torch_run.sh config/torch/minimal-overfit-8steps-proprioception.yaml 4
-./torch_run.sh config/torch/minimal-nomad-proprioception-nopool.yaml 4
+# ./torch_run.sh config/torch/minimal-nomad-proprioception-nopool.yaml 4
 
 
 # ./torch_run.sh config/torch/minimal-nomad-lr1e-3.yaml 4
