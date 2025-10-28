@@ -12,7 +12,7 @@ from vint_train.data.data_utils import to_local_coords_3d
 
 from scipy.spatial.transform import Rotation as R
 from mpl_toolkits.mplot3d.axes3d import Axes3D
-from vint_train.data.misc import XSensConstants
+from vint_train.data.misc import XSensConstants, XsensSkeleton
 from vint_train.visualizing.nymeria_utils import plot_cond_goal_gt_pred, save_gif, unnormalize
 
 def normalize_data_smpl_pose(data, stats):
@@ -224,17 +224,41 @@ def euler_to_rotmat(euler):
     rotmat = torch.from_numpy(rotmat).float()
     return rotmat
 
-def forward_kinematics_wrapper(abs_smpl_pose, xsens_skel, num_segments=15):
-    B = abs_smpl_pose.shape[0]
+def forward_kinematics_wrapper(abs_smpl_pose: torch.Tensor, xsens_skel: XsensSkeleton, num_segments: int = 15) -> torch.Tensor:
+    """
+    Converts pelvis xyz + 15*(rpy) poses into joint xyz values.
+    
+    Args:
+    abs_smpl_pose (torch.Tensor): (B, 48) or (B, T, 48)
+    xsens_skel (XsensSkeleton): XSens skeleton for forward kinematics
+    num_segments (int): number of segments to use
+    
+    Returns:
+    body_translation (torch.Tensor): (B, num_segments, 3) or (B, T, num_segments, 3)
+    """
+    device = abs_smpl_pose.device
+    abs_smpl_pose = abs_smpl_pose.cpu()
+    if abs_smpl_pose.ndim == 3:
+        B, T = abs_smpl_pose.shape[0], abs_smpl_pose.shape[1]
+        N = B * T
+        abs_smpl_pose = abs_smpl_pose.flatten(0, 1)
+    else:
+        B = N = abs_smpl_pose.shape[0]
+        T = None
+        
     root_xyz = abs_smpl_pose[:, :3]
 
     smpl_pose_euler = abs_smpl_pose[:, 3:].unflatten(1, (num_segments, 3))
     smpl_pose_rotmat = euler_to_rotmat(smpl_pose_euler.flatten(0, 1))
-    smpl_pose_rotmat = smpl_pose_rotmat.unflatten(0, (B, num_segments))
+    smpl_pose_rotmat = smpl_pose_rotmat.unflatten(0, (N, num_segments))
 
     body_translation = xsens_skel.forward_kinematics(root_xyz, smpl_pose_rotmat, to_smpl=False, to_mvnx=False)
     body_translation = body_translation[:, :num_segments]
+    
+    if T is not None:
+        body_translation = body_translation.unflatten(0, (B, T))
 
+    body_translation = body_translation.to(device)
     return body_translation
 
 def plot_images_and_actions_full_body(image_plot_dir, # save location

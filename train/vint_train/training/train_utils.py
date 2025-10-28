@@ -1,5 +1,5 @@
 from vint_train.data.misc import XsensSkeleton, XSensConstants
-from vint_train.training.nymeria_training_utils import get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, plot_images_and_actions_full_body, unnormalize_data_smpl_pose, unnormalize_data_smpl_pose_gaussian
+from vint_train.training.nymeria_training_utils import forward_kinematics_wrapper, get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, plot_images_and_actions_full_body, unnormalize_data_smpl_pose, unnormalize_data_smpl_pose_gaussian
 import wandb
 import os
 import numpy as np
@@ -41,6 +41,48 @@ for key in data_config['action_stats']:
 
 # Train utils for NOMAD
 
+def _compute_3d_joint_metrics(
+    model_output_dict: Dict[str, torch.Tensor],
+    batch_deltas_gt: torch.Tensor,
+    action_mask: torch.Tensor,
+    first_pose: torch.Tensor,
+    xsens_skel: XsensSkeleton,
+):
+    uc_deltas = model_output_dict['uc_actions']
+    gc_deltas = model_output_dict['gc_actions']
+    
+    # actions == rpy angles for all joints + pelvis xyz
+    uc_actions = get_action_smpl_torch(first_pose, uc_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
+    gc_actions = get_action_smpl_torch(first_pose, gc_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
+    gt_actions = get_action_smpl_torch(first_pose, batch_deltas_gt, XSensConstants.upper_body_num_parts) # B, T, 48
+    
+    def _compute_pose_and_loss(actn, gt_actn, skel, actn_mask=None):
+        gt_xyz = forward_kinematics_wrapper(gt_actn, skel, XSensConstants.upper_body_num_parts) # B, num_segments, 3
+        gt_rpy = gt_actn[:, 3:].reshape(-1, XSensConstants.upper_body_num_parts, 3) # B, num_segments, 3
+        pred_xyz = forward_kinematics_wrapper(actn, skel, XSensConstants.upper_body_num_parts) # B, num_segments, 3
+        pred_rpy = actn[:, 3:].reshape(-1, XSensConstants.upper_body_num_parts, 3) # B, num_segments, 3
+        res = {}
+        for i, body_part_name in enumerate(XSensConstants.part_names[:XSensConstants.upper_body_num_parts]):
+            R_gt = R.from_euler('xyz', gt_rpy[:, i, :].detach().cpu().numpy(), degrees=False)
+            R_pred = R.from_euler('xyz', pred_rpy[:, i, :].detach().cpu().numpy(), degrees=False)
+            ang_dist = torch.from_numpy((R_gt.inv() * R_pred).magnitude() / np.pi * 180).to(actn.device).float() # B
+            xyz_dist = torch.norm(gt_xyz[:, i, :] - pred_xyz[:, i, :], dim=-1) # B
+            if actn_mask is not None:
+                ang_dist = ang_dist * actn_mask
+                xyz_dist = xyz_dist * actn_mask
+            res[f"{body_part_name}-angular_distance"] = ang_dist.mean()
+            res[f"{body_part_name}-xyz_distance"] = xyz_dist.mean()
+        return res
+    
+    uc_3d_joint_metrics_dict = _compute_pose_and_loss(uc_actions[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
+    gc_3d_joint_metrics_dict = _compute_pose_and_loss(gc_actions[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
+    
+    return {
+        **{f"uc_{key}": value for key, value in uc_3d_joint_metrics_dict.items()},
+        **{f"gc_{key}": value for key, value in gc_3d_joint_metrics_dict.items()},
+    }
+
+
 def _compute_metrics_nomad(
     model_output_dict: Dict[str, torch.Tensor],
     batch_dist_label: torch.Tensor,
@@ -71,63 +113,19 @@ def _compute_metrics_nomad(
     uc_action_loss = action_reduce(F.mse_loss(uc_actions, batch_action_label, reduction="none"))
     gc_action_loss = action_reduce(F.mse_loss(gc_actions, batch_action_label, reduction="none"))
 
-    uc_action_waypts_cos_similairity = action_reduce(F.cosine_similarity(
-        uc_actions[:, :, :3], batch_action_label[:, :, :3], dim=-1
-    ))
-    uc_multi_action_waypts_cos_sim = action_reduce(F.cosine_similarity(
-        torch.flatten(uc_actions[:, :, :3], start_dim=1),
-        torch.flatten(batch_action_label[:, :, :3], start_dim=1),
-        dim=-1,
-    ))
-
-    gc_action_waypts_cos_similairity = action_reduce(F.cosine_similarity(
-        gc_actions[:, :, :3], batch_action_label[:, :, :3], dim=-1
-    ))
-    gc_multi_action_waypts_cos_sim = action_reduce(F.cosine_similarity(
-        torch.flatten(gc_actions[:, :, :3], start_dim=1),
-        torch.flatten(batch_action_label[:, :, :3], start_dim=1),
-        dim=-1,
-    ))
-    
-    # compute per-segment losses
-    segment_results = {}
-    
-    uc_actions = uc_actions.flatten(0, 1)
-    gc_actions = gc_actions.flatten(0, 1)
-    batch_action_label = batch_action_label.flatten(0, 1)
-    
-    for i, segment in enumerate(XSensConstants.part_names[:XSensConstants.upper_body_num_parts]):
-        if segment == "Pelvis":
-            segment_results[f"segments/uc_{segment}_xyz_loss"] = F.mse_loss(uc_actions[:, 3*i:3*(i+1)], batch_action_label[:, 3*i:3*(i+1)])
-            segment_results[f"segments/gc_{segment}_xyz_loss"] = F.mse_loss(gc_actions[:, 3*i:3*(i+1)], batch_action_label[:, 3*i:3*(i+1)], reduction="mean")
-        
-        uc_R = R.from_euler('xyz', to_numpy(uc_actions[:, 3*i+3:3*(i+1)+3]), degrees=False)
-        gc_R = R.from_euler('xyz', to_numpy(gc_actions[:, 3*i+3:3*(i+1)+3]), degrees=False)
-        batch_R = R.from_euler('xyz', to_numpy(batch_action_label[:, 3*i+3:3*(i+1)+3]), degrees=False)
-        
-        # Compute angular distance (in radians) between uc_R and batch_R
-        ang_dist = uc_R.inv() * batch_R
-        ang_dist = ang_dist.magnitude()  # Returns angle in radians as numpy array
-        segment_results[f"segments/uc_{segment}_angular_distance"] = torch.from_numpy(ang_dist).to(uc_actions.device).float().mean()
-        
-        # Compute angular distance (in radians) between gc_R and batch_R
-        ang_dist = gc_R.inv() * batch_R
-        ang_dist = ang_dist.magnitude()
-        segment_results[f"segments/gc_{segment}_angular_distance"] = torch.from_numpy(ang_dist).to(gc_actions.device).float().mean()
-
     results = {
         "uc_action_loss": uc_action_loss,
-        "uc_action_waypts_cos_sim": uc_action_waypts_cos_similairity,
-        "uc_multi_action_waypts_cos_sim": uc_multi_action_waypts_cos_sim,
         "gc_dist_loss": gc_dist_loss,
         "gc_action_loss": gc_action_loss,
-        "gc_action_waypts_cos_sim": gc_action_waypts_cos_similairity,
-        "gc_multi_action_waypts_cos_sim": gc_multi_action_waypts_cos_sim,
-        **segment_results,
     }
 
     return results
 
+def reduce_metrics(mdict):
+    for key, value in mdict.items():
+        torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
+        mdict[key] = value / torch.distributed.get_world_size()
+    return mdict
 
 def train_nomad(
     model: nn.Module,
@@ -267,32 +265,27 @@ def train_nomad(
                 model_output_dict["uc_actions"].flatten(0, 1)
             ).unflatten(0, (B, -1))
             
-            # unnormalize from gaussian for loss metrics and visualizations
+            # unnormalize from gaussian for loss metrics and visualizationse
             first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
             deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
+            goal_pos = unnormalize_data_smpl_pose_gaussian(goal_pos.flatten(0, 1)).unflatten(0, (B, -1))
         
             # Compute metrics
             if i % print_log_freq == 0:
+                _3dp_metrics = _compute_3d_joint_metrics(model_output_dict, deltas.to(device), action_mask.to(device), first_pose.to(device), XsensSkeleton())
                 metrics = _compute_metrics_nomad(model_output_dict, distance.to(device), deltas.to(device), action_mask.to(device))
-                
-                if torch.distributed.is_initialized():
-                    # Reduce all metrics across ranks by averaging
-                    for key, value in metrics.items():
-                        torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
-                        metrics[key] = value / torch.distributed.get_world_size()
+                if torch.distributed.is_initialized(): # Reduce all metrics across ranks by averaging
+                    metrics = reduce_metrics(metrics)
+                    _3dp_metrics = reduce_metrics(_3dp_metrics)
                 
                 data_log = {}
                 for key, value in metrics.items():
-                    if key not in loggers:
-                        loggers[key] = Logger(key, "train", window_size=print_log_freq)
-                    loggers[key].log_data(value.item())
                     data_log[key] = value.item()
-            
-                for key, logger in loggers.items():
-                    if "segments/" in key:
-                        continue
-                    if i % print_log_freq == 0 and print_log_freq != 0 and rank == 0:
-                        print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
+                for key, value in _3dp_metrics.items():
+                    if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+                        data_log[f"segments_leaf/{key}"] = value.item()
+                    else:
+                        data_log[f"segments/{key}"] = value.item()
 
                 if use_wandb and i % wandb_log_freq == 0 and rank == 0:
                     wandb.log(data_log, commit=False)
@@ -537,26 +530,21 @@ def evaluate_nomad(
                     action_mask.to(device),
                 )
         
-        if torch.distributed.is_initialized():
-            # Reduce all metrics across ranks by averaging
-            for key, value in metrics.items():
-                torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
-                metrics[key] = value / torch.distributed.get_world_size()
+        _3dp_metrics = _compute_3d_joint_metrics(model_output_dict, deltas.to(device), action_mask.to(device), first_pose.to(device), XsensSkeleton())
+        
+        if torch.distributed.is_initialized(): # Reduce all metrics across ranks by averaging
+            metrics = reduce_metrics(metrics)
+            _3dp_metrics = reduce_metrics(_3dp_metrics)
         
         data_log = {}
         for key, value in metrics.items():
-            if key not in loggers:
-                loggers[key] = Logger(key, "eval", window_size=print_log_freq)
-            loggers[key].log_data(value.item())
             data_log[f"eval/{key}"] = value.item()
+        for key, value in _3dp_metrics.items():
+            if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+                data_log[f"eval_segments_leaf/{key}"] = value.item()
+            else:
+                data_log[f"eval_segments/{key}"] = value.item()
         all_data_logs.append(data_log)
-        
-        if i % print_log_freq == 0:
-            for key, logger in loggers.items():
-                if "segments/" in key:
-                    continue
-                if i % print_log_freq == 0 and print_log_freq != 0 and rank == 0:
-                    print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
 
         if i == 0 and rank == 0:
             batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])

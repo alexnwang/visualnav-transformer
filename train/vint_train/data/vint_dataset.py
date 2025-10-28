@@ -379,16 +379,15 @@ class ViNT_Dataset(Dataset):
             actions_torch = calculate_sin_cos(actions_torch)
         
         # get deltas from actions and normalize
-        actions_torch = self.get_deltas(actions_torch, num_segments=self.num_segments)
+        deltas_torch = self.get_deltas(actions_torch, num_segments=self.num_segments)
         
         # normalize goals as well
         goal_pos = torch.as_tensor(goal_pos, dtype=torch.float32)
         
         # load first pose for visualizations
         _, first_pose = self._compute_actions_smpl_relpelvis(curr_traj_data, curr_time, curr_time)
-        
         if self.normalize:
-            actions_torch = self.normalize_data(actions_torch, self.ACTION_STATS)
+            deltas_torch = self.normalize_data(deltas_torch, self.ACTION_STATS)
             goal_pos = self.normalize_data(goal_pos, self.ACTION_STATS)
             first_pose = self.normalize_data(first_pose, self.ACTION_STATS)
         
@@ -402,7 +401,7 @@ class ViNT_Dataset(Dataset):
         return (
             torch.as_tensor(obs_image, dtype=torch.float32),
             torch.as_tensor(goal_image, dtype=torch.float32),
-            actions_torch,
+            deltas_torch,
             torch.as_tensor(distance, dtype=torch.int64),
             torch.as_tensor(goal_pos, dtype=torch.float32),
             torch.as_tensor(self.dataset_index, dtype=torch.int64),
