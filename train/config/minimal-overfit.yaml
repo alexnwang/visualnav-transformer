@@ -1,19 +1,19 @@
 project_name: nomad-minimal
-run_name: nomad-minimal
+run_name: overfit
 
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
 train: True
-batch_size: 64
+batch_size: 32
 epochs: 10
 gpu_ids: [0]
-num_workers: 16
+num_workers: 7
 lr: 1e-4
 optimizer: adamw
 clipping: False
 max_norm: 1.
 scheduler: "cosine"
-warmup: True 
+warmup: False 
 warmup_epochs: 1
 cyclic_period: 10
 plateau_patience: 3
@@ -22,18 +22,16 @@ seed: 0
 
 # model params
 model_type: nomad
-encoding_size: 256
-# vision enc
 vision_encoder: nomad_vint
+encoding_size: 256
+proprioception: False
 obs_encoder: efficientnet-b0
-# vision transformer
+attn_unet: False
+cond_predict_scale: False
 mha_num_attention_heads: 4
 mha_num_attention_layers: 4
 mha_ff_dim_factor: 4
-# denoiser
 down_dims: [256, 384, 512]
-attn_unet: False
-cond_predict_scale: False
 
 # diffusion model params
 input_dims: 48
@@ -66,17 +64,18 @@ learn_angle: False
 image_size: [224, 224] # width, height
 datasets:
   nymeria:
-    data_folder: /scratch/anw2067/nymeria
-    train: data_splits/nymeria/train/
-    test: data_splits/nymeria/test/
+    repeat: 100
+    data_folder: /datasets/nymeria/2025-08-31_2251_backup/nymeria_head_only_processed_4fps_smpl
+    train: data_splits/nymeria_singleton/train/
+    test: data_splits/nymeria_singleton/test/
     action_stats:
       min: [-2.5, -2.5, -2.5, -3.14159, -3.14159, -3.14159]
       max: [1.5, 1.5, 1.5, 3.14159, 3.14159, 3.14159]
-    gaussian_normalization_stats_path: "/home/anw2067/visualnav-transformer/train/nymeria_nomad_mean_var_stats.json"
+    gaussian_normalization_stats_path: "/home/alexnwang/visualnav-transformer/train/logs/nomad_analysis/nomadanalysis/mean_var_stats.json"
 
 # logging stuff
 ## =0 turns off
-print_log_freq: 500 # in iterations
+print_log_freq: 100 # in iterations
 image_log_freq: 1000 #0 # in iterations
 num_images_log: 8 #0 
 pairwise_test_freq: 0 # in epochs
