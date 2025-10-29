@@ -80,8 +80,8 @@ def init_distributed(port=37124, rank_and_world_size=(None, None)):
 
 
 def main(rank, world_size, config):
-    assert config["distance"]["min_dist_cat"] < config["distance"]["max_dist_cat"]
-    assert config["action"]["min_dist_cat"] < config["action"]["max_dist_cat"]
+    assert config["distance"]["min_dist_cat"] <= config["distance"]["max_dist_cat"]
+    assert config["action"]["min_dist_cat"] <= config["action"]["max_dist_cat"]
 
     device = torch.device(f"cuda:{rank}")
     
