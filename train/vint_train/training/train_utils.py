@@ -281,9 +281,17 @@ def train_nomad(
                 data_log = {}
                 for key, value in metrics.items():
                     data_log[key] = value.item()
+                data_log['uc_leaf_xyz'], data_log['uc_leaf_angular_distance'] = 0, 0
+                data_log['gc_leaf_xyz'], data_log['gc_leaf_angular_distance'] = 0, 0
                 for key, value in _3dp_metrics.items():
                     if any(part in key for part in ["Pelvis", "Head", "Hand"]):
                         data_log[f"segments_leaf/{key}"] = value.item()
+                        if "uc" in key: 
+                            if "xyz" in key: data_log['uc_leaf_xyz'] += value.item() / 4.
+                            elif "angular" in key: data_log['uc_leaf_angular_distance'] += value.item() / 4.
+                        elif "gc" in key:
+                            if "xyz" in key: data_log['gc_leaf_xyz'] += value.item() / 4.
+                            elif "angular" in key: data_log['gc_leaf_angular_distance'] += value.item() / 4.
                     else:
                         data_log[f"segments/{key}"] = value.item()
 
@@ -539,9 +547,17 @@ def evaluate_nomad(
         data_log = {}
         for key, value in metrics.items():
             data_log[f"eval/{key}"] = value.item()
+        data_log["eval/uc_leaf_xyz"], data_log['eval/uc_leaf_angular_distance'] = 0, 0
+        data_log["eval/gc_leaf_xyz"], data_log['eval/gc_leaf_angular_distance'] = 0, 0
         for key, value in _3dp_metrics.items():
             if any(part in key for part in ["Pelvis", "Head", "Hand"]):
                 data_log[f"eval_segments_leaf/{key}"] = value.item()
+                if "uc" in key: 
+                    if "xyz" in key: data_log['eval/uc_leaf_xyz'] += value.item() / 4.
+                    elif "angular" in key: data_log['eval/uc_leaf_angular_distance'] += value.item() / 4.
+                elif "gc" in key:
+                    if "xyz" in key: data_log['eval/gc_leaf_xyz'] += value.item() / 4.
+                    elif "angular" in key: data_log['eval/gc_leaf_angular_distance'] += value.item() / 4.
             else:
                 data_log[f"eval_segments/{key}"] = value.item()
         all_data_logs.append(data_log)
