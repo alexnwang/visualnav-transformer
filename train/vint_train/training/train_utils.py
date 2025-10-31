@@ -130,10 +130,8 @@ def reduce_metrics(mdict):
 def train_nomad(
     model: nn.Module,
     ema_model: EMAModel,
-    proprioception: bool,
     optimizer: Adam,
     dataloader: DataLoader,
-    transform: transforms,
     device: torch.device,
     noise_scheduler: DDPMScheduler,
     goal_mask_prob: float,
@@ -154,10 +152,8 @@ def train_nomad(
     Args:
         model: model to train
         ema_model: exponential moving average model
-        proprioception: whether to use proprioception
         optimizer: optimizer to use
         dataloader: dataloader for training
-        transform: transform to use
         device: device to use
         noise_scheduler: noise scheduler to train with 
         project_folder: folder to save images to
@@ -180,37 +176,36 @@ def train_nomad(
         tepoch = dataloader
     for i, data in enumerate(tepoch):
         (
-            obs_image, # obs_image shape: torch.Size([256, 12, 96, 96])
-            goal_image, # goal_image shape: torch.Size([256, 3, 96, 96])
+            batch_obs_images, # obs_image shape: torch.Size([256, (context_size+1) * 3, *image_size])
+            batch_goal_images, # goal_image shape: torch.Size([256, 3, *image_size])
             deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
+            context_poses, # context poses shape: torch.Size([256, (context_size+1), 48]) # 3 context poses + current, each with 48 dimensions
             distance, # distance shape: torch.Size([256])
             goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
             dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
             action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
-            first_pose, # first_pose shape: torch.Size([256, 1, 48])
+            first_pose, # first_pose shape: torch.Size([256, 1, 48]),
+            obs_images, # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
+            goal_image, # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
         ) = data
                     
-        obs_images = torch.split(obs_image, 3, dim=1)
-        batch_obs_images = [transform(obs) for obs in obs_images]
-        batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device, non_blocking=True)
-        batch_goal_images = transform(goal_image).to(device, non_blocking=True)
+        batch_obs_images = batch_obs_images.to(device, non_blocking=True)
+        batch_goal_images = batch_goal_images.to(device, non_blocking=True)
         action_mask = action_mask.to(device, non_blocking=True)
+        context_poses = context_poses.to(device, non_blocking=True)
         distance = distance.float().to(device, non_blocking=True)
         naction = deltas.to(device, non_blocking=True).float()
-        joint_angles = first_pose[:, 0, 3:].to(device, non_blocking=True)
 
         B = deltas.shape[0]
 
         # Generate random goal mask
         goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
-        obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
+        obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses)
         # Predict distance
         dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
         dist_loss = nn.functional.mse_loss(dist_pred.squeeze(-1), distance)
         dist_loss = (dist_loss * (1 - goal_mask.float())).mean() / (1e-2 +(1 - goal_mask.float()).mean())
 
-        if proprioception:
-            obsgoal_cond = torch.cat([obsgoal_cond, joint_angles], dim=1)
 
         # Sample noise to add to actions
         noise = torch.randn(naction.shape, device=device)
@@ -253,8 +248,8 @@ def train_nomad(
         # In-step evaluations
         if i % print_log_freq == 0 or (image_log_freq != 0 and i % image_log_freq == 0):
             model_output_dict = model_output(
-                ema_model.averaged_model, proprioception, noise_scheduler,
-                batch_obs_images, batch_goal_images, first_pose,
+                ema_model.averaged_model, noise_scheduler,
+                batch_obs_images, batch_goal_images, context_poses,
                 pred_horizon=deltas.shape[1], action_dim=deltas.shape[2],
                 num_samples=1,device=device,
             )
@@ -266,9 +261,7 @@ def train_nomad(
             ).unflatten(0, (B, -1))
             
             # unnormalize from gaussian for loss metrics and visualizationse
-            first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
             deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
-            goal_pos = unnormalize_data_smpl_pose_gaussian(goal_pos.flatten(0, 1)).unflatten(0, (B, -1))
         
             # Compute metrics
             if i % print_log_freq == 0:
@@ -299,7 +292,7 @@ def train_nomad(
                     wandb.log(data_log, commit=False)
 
             if image_log_freq != 0 and i % image_log_freq == 0 and rank == 0:
-                batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+                batch_viz_obs_images = TF.resize(obs_images[:, -1], VISUALIZATION_IMAGE_SIZE[::-1])
                 batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
                 path = os.path.join(project_folder, f"epoch_{epoch}", "train")
                 os.makedirs(path, exist_ok=True)
@@ -349,9 +342,7 @@ def train_nomad(
 def evaluate_nomad(
     eval_type: str,
     ema_model: EMAModel,
-    proprioception: bool,
     dataloader: DataLoader,
-    transform: transforms,
     device: torch.device,
     noise_scheduler: DDPMScheduler,
     goal_mask_prob: float,
@@ -371,9 +362,7 @@ def evaluate_nomad(
     Args:
         eval_type (string): f"{data_type}_{eval_type}" (e.g. "recon_train", "gs_test", etc.)
         ema_model (nn.Module): exponential moving average version of model to evaluate
-        proprioception: whether to use proprioception
         dataloader (DataLoader): dataloader for eval
-        transform (transforms): transform to apply to images
         device (torch.device): device to use for evaluation
         noise_scheduler: noise scheduler to evaluate with 
         project_folder (string): path to project folder
@@ -414,22 +403,24 @@ def evaluate_nomad(
         
     for i, data in enumerate(tepoch):
         (
-            obs_image, # obs_image shape: torch.Size([256, 12, 96, 96])
-            goal_image, # goal_image shape: torch.Size([256, 3, 96, 96])
+            batch_obs_images, # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
+            batch_goal_images, # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
             deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
+            context_poses, # context_poses shape: torch.Size([256, context_size+1, 45]) # context poses
             distance, # distance shape: torch.Size([256])
             goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
             dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
             action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
-            first_pose, # first_pose shape: torch.Size([256, 1, 48])
+            first_pose, # first_pose shape: torch.Size([256, 1, 48]),
+            obs_images, # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
+            goal_image, # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
         ) = data
         
-        obs_images = torch.split(obs_image, 3, dim=1)
+        batch_obs_images = batch_obs_images.to(device, non_blocking=True)
+        batch_goal_images = batch_goal_images[:, None].to(device, non_blocking=True)
         batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
         batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-        batch_obs_images = [transform(obs) for obs in obs_images]
-        batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
-        batch_goal_images = transform(goal_image).to(device)
+
         action_mask = action_mask.to(device)
 
         B = deltas.shape[0]
@@ -439,17 +430,11 @@ def evaluate_nomad(
         goal_mask = torch.ones_like(rand_goal_mask).long().to(device)
         no_mask = torch.zeros_like(rand_goal_mask).long().to(device)
 
-        rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask)
+        rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask, context_poses=context_poses)
 
-        obsgoal_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask)
+        obsgoal_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses)
         obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
-        goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
-
-        if proprioception:
-            joint_angles = first_pose[:, 0, 3:].to(device)
-            obsgoal_cond = torch.cat([obsgoal_cond, joint_angles], dim=1)
-            goal_mask_cond = torch.cat([goal_mask_cond, joint_angles], dim=1)
-            rand_mask_cond = torch.cat([rand_mask_cond, joint_angles], dim=1)
+        goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses)
 
         distance = distance.to(device)
 
@@ -510,7 +495,6 @@ def evaluate_nomad(
         # Accumulate metrics for averaging at the end
         model_output_dict = model_output(
             ema_model,
-            proprioception,
             noise_scheduler,
             batch_obs_images,
             batch_goal_images,
@@ -528,7 +512,6 @@ def evaluate_nomad(
         ).unflatten(0, (B, -1))
         
         # unnormalize from gaussian for loss metrics and visualizations
-        first_pose = unnormalize_data_smpl_pose_gaussian(first_pose.flatten(0, 1)).unflatten(0, (B, -1))
         deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
 
         metrics = _compute_metrics_nomad(
@@ -604,52 +587,12 @@ def evaluate_nomad(
         wandb.log(avg_data_log)
 
 
-# normalize data
-# def get_data_stats(data):
-#     data = data.reshape(-1,data.shape[-1])
-#     stats = {
-#         'min': np.min(data, axis=0),
-#         'max': np.max(data, axis=0)
-#     }
-#     return stats
-
-# def normalize_data(data, stats):
-#     # nomalize to [0,1]
-#     ndata = (data - stats['min']) / (stats['max'] - stats['min'])
-#     # normalize to [-1, 1]
-#     ndata = ndata * 2 - 1
-#     return ndata
-
-# def unnormalize_data(ndata, stats):
-#     ndata = (ndata + 1) / 2
-#     data = ndata * (stats['max'] - stats['min']) + stats['min']
-#     return data
-
-# def get_delta(actions):
-#     # append zeros to first action
-#     ex_actions = np.concatenate([np.zeros((actions.shape[0],1,actions.shape[-1])), actions], axis=1)
-#     delta = ex_actions[:,1:] - ex_actions[:,:-1]
-#     return delta
-
-# def get_action(diffusion_output, action_stats=ACTION_STATS):
-#     # diffusion_output: (B, 2*T+1, 1)
-#     # return: (B, T-1)
-#     device = diffusion_output.device
-#     ndeltas = diffusion_output
-#     ndeltas = ndeltas.reshape(ndeltas.shape[0], -1, 2)
-#     ndeltas = to_numpy(ndeltas)
-#     ndeltas = unnormalize_data(ndeltas, action_stats)
-#     actions = np.cumsum(ndeltas, axis=1)
-#     return from_numpy(actions).to(device)
-
-
 def model_output(
     model: nn.Module,
-    proprioception: bool,
     noise_scheduler: DDPMScheduler,
     batch_obs_images: torch.Tensor,
     batch_goal_images: torch.Tensor,
-    first_pose: torch.Tensor,
+    context_poses: torch.Tensor,
     pred_horizon: int,
     action_dim: int,
     num_samples: int,
@@ -660,23 +603,18 @@ def model_output(
     Outputs are DELTAS and are NOT unnormalized or scaled.
     """
     goal_mask = torch.ones((batch_goal_images.shape[0],)).long().to(device)
-    obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
+    obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses)
     # obs_cond = obs_cond.flatten(start_dim=1)
     obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
 
     no_mask = torch.zeros((batch_goal_images.shape[0],)).long().to(device)
-    obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask)
+    obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses)
     
     # obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
     gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
     
     # obsgoal_cond = obsgoal_cond.flatten(start_dim=1)  
     obsgoal_cond = obsgoal_cond.repeat_interleave(num_samples, dim=0)
-
-    if proprioception:
-        joint_angles = first_pose[:, 0, 3:].to(device)
-        obsgoal_cond = torch.cat([obsgoal_cond, joint_angles], dim=1)
-        obs_cond = torch.cat([obs_cond, joint_angles], dim=1)
 
     # initialize action from Gaussian noise
     noisy_diffusion_output = torch.randn(

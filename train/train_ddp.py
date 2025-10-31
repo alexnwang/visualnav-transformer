@@ -129,6 +129,7 @@ def main(rank, world_size, config):
                     data_split_folder=data_config[data_split_type],
                     dataset_name=dataset_name,
                     image_size=config["image_size"],
+                    transform=transform,
                     waypoint_spacing=data_config["waypoint_spacing"],
                     min_dist_cat=config["distance"]["min_dist_cat"],
                     max_dist_cat=config["distance"]["max_dist_cat"],
@@ -207,12 +208,13 @@ def main(rank, world_size, config):
         mha_ff_dim_factor=config["mha_ff_dim_factor"],
         pool_features=config.get("pool_features", True),
         image_size=config["image_size"],
+        proprioception=config.get("proprioception", False),
     )
     vision_encoder = replace_bn_with_gn(vision_encoder)
     
     global_cond_dim = config["encoding_size"]
-    if config.get("proprioception", False):
-        global_cond_dim += 45
+    # if config.get("proprioception", False):
+    #     global_cond_dim += 45
     
     noise_pred_net = ConditionalUnet1D(
             input_dim=config['input_dims'],
@@ -340,13 +342,11 @@ def main(rank, world_size, config):
     train_eval_loop_nomad(
         train_model=config["train"],
         model=model,
-        proprioception=config.get("proprioception", False),
         optimizer=optimizer,
         lr_scheduler=scheduler,
         noise_scheduler=noise_scheduler,
         train_loader=train_loader,
         test_dataloaders=test_dataloaders,
-        transform=transform,
         goal_mask_prob=config["goal_mask_prob"],
         epochs=config["epochs"],
         device=device,

@@ -16,7 +16,8 @@ class NoMaD_ViNT(nn.Module):
         mha_num_attention_layers: Optional[int] = 2,
         mha_ff_dim_factor: Optional[int] = 4,
         pool_features: Optional[bool] = True,
-        image_size: Optional[Tuple[int, int]] = (224, 224)
+        image_size: Optional[Tuple[int, int]] = (224, 224),
+        proprioception: Optional[bool] = False,
     ) -> None:
         """
         NoMaD ViNT Encoder class
@@ -26,7 +27,8 @@ class NoMaD_ViNT(nn.Module):
         self.goal_encoding_size = obs_encoding_size
         self.context_size = context_size
         self.pool_features = pool_features
-
+        self.proprioception = proprioception
+        
         # Initialize the observation encoder
         if obs_encoder.split("-")[0] == "efficientnet":
             self.obs_encoder = EfficientNet.from_name(obs_encoder, in_channels=3) # context
@@ -67,6 +69,9 @@ class NoMaD_ViNT(nn.Module):
             norm_first=True
         )
         self.sa_encoder = nn.TransformerEncoder(self.sa_layer, num_layers=mha_num_attention_layers)
+        
+        if self.proprioception:
+            self.proprioception_encoder = nn.Linear(45, obs_encoding_size)
 
         # Definition of the goal mask (convention: 0 = no mask, 1 = mask)
         self.goal_mask = torch.zeros((1, self.context_size + 2), dtype=torch.bool)
@@ -76,68 +81,58 @@ class NoMaD_ViNT(nn.Module):
         self.avg_pool_mask = torch.cat([1 - self.no_mask.float(), (1 - self.goal_mask.float()) * ((self.context_size + 2)/(self.context_size + 1))], dim=0)
 
 
-    def forward(self, obs_img: torch.tensor, goal_img: torch.tensor, input_goal_mask: torch.tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
-
+    def forward(self, obs_img: torch.tensor, goal_img: torch.tensor,
+                input_goal_mask: torch.tensor = None,
+                context_poses: torch.tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
         device = obs_img.device
-
-        # Initialize the goal encoding
-        goal_encoding = torch.zeros((obs_img.size()[0], 1, self.goal_encoding_size)).to(device)
+        
+        if self.proprioception:
+            assert context_poses is not None, "Context poses are required for proprioception"
+            if context_poses.shape[-1] == 48:
+                context_poses = context_poses[:, :, 3:] # B, C+1, 45
+            assert context_poses.shape[-1] == 45, "Context poses must have 45 dimensions"
+            encoded_context_pose = self.proprioception_encoder(context_poses) # B, C+1, self.obs_encoding_size
         
         # Get the input goal mask 
         if input_goal_mask is not None:
             goal_mask = input_goal_mask.to(device)
 
         # Get the goal encoding
-        obsgoal_img = torch.cat([obs_img[:, 3*self.context_size:, :, :], goal_img], dim=1) # concatenate the obs image/context and goal image --> non image goal?
+        obsgoal_img = torch.cat([obs_img[:, self.context_size], goal_img], dim=1) # concatenate the obs image/context and goal image --> non image goal?
         obsgoal_encoding = self.goal_encoder.extract_features(obsgoal_img) # get encoding of this img  # torch.Size([B, 1280, 3, 3])
         if self.pool_features:
             obsgoal_encoding = self.goal_encoder._avg_pooling(obsgoal_encoding) # avg pooling 
-            if self.goal_encoder._global_params.include_top:
-                obsgoal_encoding = obsgoal_encoding.flatten(start_dim=1)
-                obsgoal_encoding = self.goal_encoder._dropout(obsgoal_encoding)
-        else:
-            if self.goal_encoder._global_params.include_top:
-                obsgoal_encoding = obsgoal_encoding.flatten(start_dim=2)
-                obsgoal_encoding = self.goal_encoder._dropout(obsgoal_encoding)
-                obsgoal_encoding = obsgoal_encoding.permute(0, 2, 1) # permute to (B, h*w, C)
+        obsgoal_encoding = obsgoal_encoding.flatten(start_dim=2) # B, 1280, L
+        if self.goal_encoder._global_params.include_top:
+            obsgoal_encoding = self.goal_encoder._dropout(obsgoal_encoding)
+        obsgoal_encoding = obsgoal_encoding.permute(0, 2, 1) # B, L, 1280
         obsgoal_encoding = self.compress_goal_enc(obsgoal_encoding)
-
-        if len(obsgoal_encoding.shape) == 2:
-            obsgoal_encoding = obsgoal_encoding.unsqueeze(1)
-        assert obsgoal_encoding.shape[2] == self.goal_encoding_size
         goal_encoding = obsgoal_encoding
         
         # Get the observation encoding
-        obs_img = torch.split(obs_img, 3, dim=1)
-        obs_img = torch.concat(obs_img, dim=0)
-        obs_encoding = self.obs_encoder.extract_features(obs_img)
+        B, Cplus1 = obs_img.shape[:2]
+        obs_img = obs_img.flatten(0, 1) # B*(C+1), 3, *image_size
+        obs_encoding = self.obs_encoder.extract_features(obs_img) # B*(C+1), 1280, *image_size/32
         if self.pool_features:
-            obs_encoding = self.obs_encoder._avg_pooling(obs_encoding)
-            if self.obs_encoder._global_params.include_top:
-                obs_encoding = obs_encoding.flatten(start_dim=1)
-                obs_encoding = self.obs_encoder._dropout(obs_encoding)
-            obs_encoding = self.compress_obs_enc(obs_encoding)
-            obs_encoding = obs_encoding.unsqueeze(1)
-            obs_encoding = obs_encoding.reshape((self.context_size+1, -1, self.obs_encoding_size))
-            obs_encoding = torch.transpose(obs_encoding, 0, 1)
-        else:
-            if self.obs_encoder._global_params.include_top:
-                obs_encoding = obs_encoding.flatten(start_dim=2)
-                obs_encoding = self.obs_encoder._dropout(obs_encoding)
-                obs_encoding = obs_encoding.permute(0, 2, 1)
-            obs_encoding = self.compress_obs_enc(obs_encoding)
-            L = obs_encoding.shape[1]
-            obs_encoding = obs_encoding.reshape((self.context_size+1, -1, L, self.obs_encoding_size))
-            obs_encoding = torch.transpose(obs_encoding, 0, 1).flatten(1, 2) # (C+1, B, L, D) --> (B, C+1, L, D)
-
-        obs_encoding = torch.cat((obs_encoding, goal_encoding), dim=1)
+            obs_encoding = self.obs_encoder._avg_pooling(obs_encoding) # B*(C+1), 1280, 1, 1
+        obs_encoding = obs_encoding.flatten(start_dim=2) # B*(C+1), 1280, L
+        L = obs_encoding.shape[-1]
+        if self.obs_encoder._global_params.include_top:
+            obs_encoding = self.obs_encoder._dropout(obs_encoding)
+        obs_encoding = self.compress_obs_enc(obs_encoding.permute(0, 2, 1)) # B*(C+1), L, self.obs_encoding_size
+        obs_encoding = obs_encoding.reshape((B, Cplus1, -1, self.obs_encoding_size))
+        if self.proprioception:
+            obs_encoding = obs_encoding + encoded_context_pose[:, :, None]
+        
+        obs_encoding = obs_encoding.flatten(1, 2) # flatten to B, (C+1)*L, self.obs_encoding_size, L=1 if pool_features=True
+        obs_encoding = torch.cat((obs_encoding, goal_encoding), dim=1) # B, (C+2)*L, self.obs_encoding_size; L = 1 if pool_features=True
         
         # If a goal mask is provided, mask some of the goal tokens
         if goal_mask is not None:
             no_goal_mask = goal_mask.long()
-            src_key_padding_mask = torch.index_select(self.all_masks.to(device), 0, no_goal_mask)
+            src_key_padding_mask = torch.index_select(self.all_masks.to(device), 0, no_goal_mask) # B, C+2
             if not self.pool_features:
-                src_key_padding_mask = src_key_padding_mask[..., None].repeat(1, 1, L).flatten(1, 2)
+                src_key_padding_mask = src_key_padding_mask[..., None].repeat(1, 1, L).flatten(1, 2) # B, C+2, 1 -> B, C+2, L -> B, (C+2)*L
         else:
             src_key_padding_mask = None
         

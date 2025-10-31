@@ -20,13 +20,11 @@ from diffusers.training_utils import EMAModel
 def train_eval_loop_nomad(
     train_model: bool,
     model: nn.Module,
-    proprioception: bool,
     optimizer: Adam, 
     lr_scheduler: torch.optim.lr_scheduler._LRScheduler,
     noise_scheduler: DDPMScheduler,
     train_loader: DataLoader,
     test_dataloaders: Dict[str, DataLoader],
-    transform: transforms,
     goal_mask_prob: float,
     epochs: int,
     device: torch.device,
@@ -52,7 +50,6 @@ def train_eval_loop_nomad(
         noise_scheduler: noise scheduler to use
         dataloader: dataloader for train dataset
         test_dataloaders: dict of dataloaders for testing
-        transform: transform to apply to images
         goal_mask_prob: probability of masking the goal token during training
         epochs: number of epochs to train
         device: device to train on
@@ -78,10 +75,8 @@ def train_eval_loop_nomad(
             train_nomad(
                 model=model,
                 ema_model=ema_model,
-                proprioception=proprioception,
                 optimizer=optimizer,
                 dataloader=train_loader,
-                transform=transform,
                 device=device,
                 noise_scheduler=noise_scheduler,
                 goal_mask_prob=goal_mask_prob,
@@ -130,9 +125,7 @@ def train_eval_loop_nomad(
                 evaluate_nomad(
                     eval_type=dataset_type,
                     ema_model=ema_model,
-                    proprioception=proprioception,
                     dataloader=loader,
-                    transform=transform,
                     device=device,
                     noise_scheduler=noise_scheduler,
                     goal_mask_prob=goal_mask_prob,

@@ -9,6 +9,7 @@ import io
 import lmdb
 
 import torch
+from torchvision import transforms
 from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
 
@@ -31,6 +32,7 @@ class ViNT_Dataset(Dataset):
         data_split_folder: str,
         dataset_name: str,
         image_size: Tuple[int, int],
+        transform: transforms,
         waypoint_spacing: int,
         min_dist_cat: int,
         max_dist_cat: int,
@@ -79,6 +81,7 @@ class ViNT_Dataset(Dataset):
             self.traj_names.remove("")
 
         self.image_size = image_size
+        self.transform = transform
         self.waypoint_spacing = waypoint_spacing
         self.distance_categories = list(
             range(min_dist_cat, max_dist_cat + 1, self.waypoint_spacing)
@@ -344,12 +347,14 @@ class ViNT_Dataset(Dataset):
         else:
             raise ValueError(f"Invalid context type {self.context_type}")
 
-        obs_image = torch.cat([
+        obs_images = torch.stack([
             self._load_image(f, t) for f, t in context
-        ])
+        ], dim=0)
+        obs_image_transformed = self.transform(obs_images)
 
         # Load goal image
         goal_image = self._load_image(f_goal, goal_time)
+        goal_image_transformed = self.transform(goal_image)
 
         # Load other trajectory data
         curr_traj_data = self._get_trajectory(f_curr)
@@ -373,6 +378,12 @@ class ViNT_Dataset(Dataset):
         actions_torch = torch.as_tensor(actions, dtype=torch.float32)
         if self.learn_angle:
             actions_torch = calculate_sin_cos(actions_torch)
+            
+        # Compute context poses
+        context_poses = []
+        for f, t in context:
+            context_poses.append(self._compute_actions_smpl_relpelvis(curr_traj_data, t, t)[1])
+        context_poses = torch.cat(context_poses, dim=0)
         
         # get deltas from actions and normalize
         deltas_torch = self.get_deltas(actions_torch, num_segments=self.num_segments)
@@ -384,8 +395,10 @@ class ViNT_Dataset(Dataset):
         _, first_pose = self._compute_actions_smpl_relpelvis(curr_traj_data, curr_time, curr_time)
         if self.normalize:
             deltas_torch = self.normalize_data(deltas_torch, self.ACTION_STATS)
-            goal_pos = self.normalize_data(goal_pos, self.ACTION_STATS)
-            first_pose = self.normalize_data(first_pose, self.ACTION_STATS)
+            # only deltas should be normalized as it is the output of the model.
+            # goal_pos = self.normalize_data(goal_pos, self.ACTION_STATS)
+            # first_pose = self.normalize_data(first_pose, self.ACTION_STATS)
+            # context_poses = self.normalize_data(context_poses, self.ACTION_STATS)
         
         # compute action mask
         action_mask = (
@@ -395,14 +408,17 @@ class ViNT_Dataset(Dataset):
         )
 
         return (
-            torch.as_tensor(obs_image, dtype=torch.float32),
-            torch.as_tensor(goal_image, dtype=torch.float32),
-            deltas_torch,
+            obs_image_transformed.type(torch.float32),
+            goal_image_transformed.type(torch.float32),
+            deltas_torch.type(torch.float32),
+            context_poses.type(torch.float32),
             torch.as_tensor(distance, dtype=torch.int64),
             torch.as_tensor(goal_pos, dtype=torch.float32),
             torch.as_tensor(self.dataset_index, dtype=torch.int64),
             torch.as_tensor(action_mask, dtype=torch.float32),
             torch.as_tensor(first_pose, dtype=torch.float32),
+            obs_images.type(torch.float32),
+            goal_image.type(torch.float32),
         )
 
 class NymeriaMixin:

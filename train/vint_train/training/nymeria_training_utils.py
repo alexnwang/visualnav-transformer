@@ -16,13 +16,18 @@ from vint_train.data.misc import XSensConstants, XsensSkeleton
 from vint_train.visualizing.nymeria_utils import plot_cond_goal_gt_pred, save_gif, unnormalize
 
 def normalize_data_smpl_pose(data, stats):
-    # nomalize to [0,1]
-    ndata = data.clone()
+    if len(data.shape) > 2:
+        ndata = data.clone().view(-1, data.shape[-1])
+    else:
+        ndata = data.clone()
     min = stats['min'][:, :3] # only translation
     max = stats['max'][:, :3] # only translation
     ndata[:, :3] = (data[:, :3] - min) / (max - min)
     # normalize to [-1, 1]
     ndata[:, :3] = ndata[:, :3] * 2 - 1
+    
+    if len(data.shape) > 2:
+        ndata = ndata.view(*data.shape)
     return ndata
 
 GAUSS_STATS = None
@@ -36,14 +41,20 @@ def set_gaussian_stats(stats):
     GAUSS_STATS = stats
 
 def normalize_data_smpl_pose_gaussian(data, stats=None):    
-    # nomalize to [0,1]
-    ndata = data.clone()
+    if len(data.shape) > 2:
+        ndata = data.clone().view(-1, data.shape[-1])
+    else:
+        ndata = data.clone()
+    
     mean = stats['mean'] 
     var = stats['var']
     
-    assert mean.shape[-1] == var.shape[-1] == data.shape[-1], "Mean and std must match the data shape"
+    assert mean.shape[-1] == var.shape[-1] == ndata.shape[-1], "Mean and std must match the data shape"
     
     ndata = (ndata - mean) / torch.sqrt(var)
+
+    if len(data.shape) > 2:
+        ndata = ndata.view(*data.shape)
     return ndata
 
 def unnormalize_data_smpl_pose_gaussian(ndata, stats=None):
