@@ -1,20 +1,20 @@
 project_name: nomad-minimal
-run_name: nomad-minimal-proprioception-nopool
+run_name: nomad-minimal-big_denoiser
 
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
 train: True
-batch_size: 64
-epochs: 10
+batch_size: 32
+epochs: 3
 gpu_ids: [0]
-num_workers: 16
+num_workers: 24
 lr: 1e-4
 optimizer: adamw
 clipping: False
 max_norm: 1.
 scheduler: "cosine"
 warmup: True 
-warmup_epochs: 1
+warmup_epochs: 0.01
 cyclic_period: 10
 plateau_patience: 3
 plateau_factor: 0.5
@@ -22,18 +22,19 @@ seed: 0
 
 # model params
 model_type: nomad
-encoding_size: 256
+encoding_size: 384
 proprioception: True
 pool_features: False
 # vision enc
 vision_encoder: nomad_vint
-obs_encoder: efficientnet-b0
+obs_encoder: efficientnet-b1
+goal_encoder: efficientnet-b1
 # vision transformer
-mha_num_attention_heads: 4
-mha_num_attention_layers: 4
+mha_num_attention_heads: 8
+mha_num_attention_layers: 8
 mha_ff_dim_factor: 4
 # denoiser
-down_dims: [256, 384, 512]
+down_dims: [128, 256, 512, 768]
 attn_unet: False
 cond_predict_scale: False
 
@@ -54,10 +55,10 @@ alpha: 1e-4
 
 # distance bounds for distance and action and distance predictions 
 distance:
-  min_dist_cat: 0
-  max_dist_cat: 20
+  min_dist_cat: 8
+  max_dist_cat: 8
 action:
-  min_dist_cat: 3
+  min_dist_cat: 0
   max_dist_cat: 20
 
 # action output params
@@ -68,13 +69,13 @@ len_traj_pred: 8
 image_size: [224, 224] # width, height
 datasets:
   nymeria:
-    data_folder: /scratch/anw2067/nymeria
+    data_folder: /vast/anw2067/nymeria
     train: data_splits/nymeria/train/
     test: data_splits/nymeria/test/
     action_stats:
       min: [-2.5, -2.5, -2.5, -3.14159, -3.14159, -3.14159]
       max: [1.5, 1.5, 1.5, 3.14159, 3.14159, 3.14159]
-    gaussian_normalization_stats_path: "/home/anw2067/visualnav-transformer/train/nymeria_nomad_mean_var_stats.json"
+    gaussian_normalization_stats_path: "nymeria_nomad_mean_var_stats.json"
 
 
 # logging stuff
@@ -85,6 +86,6 @@ num_images_log: 8 #0
 pairwise_test_freq: 0 # in epochs
 eval_fraction: 0.25
 wandb_log_freq: 50 # in iterations
-eval_freq: 1# in epochs
+eval_freq: 1 # in epochs
 
 eval_batch_size: 128

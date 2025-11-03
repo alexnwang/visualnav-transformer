@@ -417,7 +417,7 @@ def evaluate_nomad(
         ) = data
         
         batch_obs_images = batch_obs_images.to(device, non_blocking=True)
-        batch_goal_images = batch_goal_images[:, None].to(device, non_blocking=True)
+        batch_goal_images = batch_goal_images.to(device, non_blocking=True)
         batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
         batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
 
@@ -546,7 +546,7 @@ def evaluate_nomad(
         all_data_logs.append(data_log)
 
         if i == 0 and rank == 0:
-            batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+            batch_viz_obs_images = TF.resize(obs_images[:, -1], VISUALIZATION_IMAGE_SIZE[::-1])
             batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
             path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
             os.makedirs(path, exist_ok=True)

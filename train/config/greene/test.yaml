@@ -4,16 +4,16 @@ run_name: nomad-minimal-proprioception-nopool
 # training setup
 use_wandb: False # set to false if you don't want to log to wandb
 train: True
-batch_size: 128
+batch_size: 32
 epochs: 10
 gpu_ids: [0]
-num_workers: 12
+num_workers: 24
 lr: 1e-4
 optimizer: adamw
 clipping: False
 max_norm: 1.
 scheduler: "cosine"
-warmup: True 
+warmup: False 
 warmup_epochs: 1
 cyclic_period: 10
 plateau_patience: 3
@@ -22,15 +22,16 @@ seed: 0
 
 # model params
 model_type: nomad
-encoding_size: 256
+encoding_size: 384
 proprioception: True
 pool_features: False
 # vision enc
 vision_encoder: nomad_vint
-obs_encoder: efficientnet-b0
+obs_encoder: efficientnet-b5
+goal_encoder: efficientnet-b5
 # vision transformer
-mha_num_attention_heads: 4
-mha_num_attention_layers: 4
+mha_num_attention_heads: 8
+mha_num_attention_layers: 8
 mha_ff_dim_factor: 4
 # denoiser
 down_dims: [256, 384, 512]
@@ -62,7 +63,7 @@ action:
 
 # action output params
 len_traj_pred: 8
-learn_angle: False
+
 
 # dataset specific parameters
 image_size: [224, 224] # width, height

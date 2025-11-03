@@ -40,8 +40,8 @@ class ViNT_Dataset(Dataset):
         max_action_distance: int,
         negative_goals: bool,
         len_traj_pred: int,
-        learn_angle: bool,
         context_size: int,
+        preserve_pose_up_down: bool,
         context_type: str = "temporal",
         end_slack: int = 0,
         goals_per_obs: int = 1,
@@ -56,9 +56,13 @@ class ViNT_Dataset(Dataset):
             data_folder (string): Directory with all the image data
             data_split_folder (string): Directory with filepaths.txt, a list of all trajectory names in the dataset split that are each seperated by a newline
             dataset_name (string): Name of the dataset [recon, go_stanford, scand, tartandrive, etc.]
+            image_size (tuple): Size of the image to load.
+            transform (transform): Transform to apply to the image.
             waypoint_spacing (int): Spacing between waypoints
             min_dist_cat (int): Minimum distance category to use
             max_dist_cat (int): Maximum distance category to use
+            min_action_distance (int): Minimum distance to use for the action_mask
+            max_action_distance (int): Maximum distance to use for the action_mask
             negative_goals (bool): Whether to use negative goal times
             len_traj_pred (int): Length of trajectory of waypoints to predict if this is an action dataset
             learn_angle (bool): Whether to learn the yaw of the robot at each predicted waypoint if this is an action dataset
@@ -67,6 +71,7 @@ class ViNT_Dataset(Dataset):
             end_slack (int): Number of timesteps to ignore at the end of the trajectory
             goals_per_obs (int): Number of goals to sample per observation
             normalize (bool): Whether to normalize the distances or actions
+            obs_type (str): What data type to use for the observation. The only one supported is "image" for now.
             goal_type (str): What data type to use for the goal. The only one supported is "image" for now.
         """
         self.data_folder = data_folder
@@ -90,7 +95,6 @@ class ViNT_Dataset(Dataset):
         self.max_dist_cat = self.distance_categories[-1]
         self.negative_goals = negative_goals
         self.len_traj_pred = len_traj_pred
-        self.learn_angle = learn_angle
 
         self.min_action_distance = min_action_distance
         self.max_action_distance = max_action_distance
@@ -125,11 +129,8 @@ class ViNT_Dataset(Dataset):
         self._load_index()
         # self._build_caches()
         
-        if self.learn_angle:
-            raise NotImplementedError("Angle learning is not implemented in this base class. Please use a subclass that implements it.")
-            self.num_action_params = 3
-        else:
-            self.num_action_params = 48 # xyz
+
+        self.num_action_params = 48 # xyz
             
         self.ACTION_STATS = {}
 
@@ -282,11 +283,7 @@ class ViNT_Dataset(Dataset):
 
         assert waypoints.shape == (self.len_traj_pred + 1, 2), f"{waypoints.shape} and {(self.len_traj_pred + 1, 2)} should be equal"
 
-        if self.learn_angle:
-            yaw = yaw[1:] - yaw[0]
-            actions = np.concatenate([waypoints[1:], yaw[:, None]], axis=-1)
-        else:
-            actions = waypoints[1:]
+        actions = waypoints[1:]
         
         if self.normalize:
             actions[:, :2] /= self.data_config["metric_waypoint_spacing"] * self.waypoint_spacing
@@ -376,8 +373,6 @@ class ViNT_Dataset(Dataset):
             assert (goal_time - curr_time) % self.waypoint_spacing == 0, f"{goal_time} and {curr_time} should be separated by an integer multiple of {self.waypoint_spacing}"
         
         actions_torch = torch.as_tensor(actions, dtype=torch.float32)
-        if self.learn_angle:
-            actions_torch = calculate_sin_cos(actions_torch)
             
         # Compute context poses
         context_poses = []

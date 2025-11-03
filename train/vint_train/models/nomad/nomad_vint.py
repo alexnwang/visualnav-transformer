@@ -11,6 +11,7 @@ class NoMaD_ViNT(nn.Module):
         self,
         context_size: int = 5,
         obs_encoder: Optional[str] = "efficientnet-b0",
+        goal_encoder: Optional[str] = "efficientnet-b0",
         obs_encoding_size: Optional[int] = 512,
         mha_num_attention_heads: Optional[int] = 2,
         mha_num_attention_layers: Optional[int] = 2,
@@ -39,7 +40,14 @@ class NoMaD_ViNT(nn.Module):
             raise NotImplementedError
         
         # Initialize the goal encoder
-        self.goal_encoder = EfficientNet.from_name("efficientnet-b0", in_channels=6) # obs+goal
+        if goal_encoder.split("-")[0] == "efficientnet":
+            self.goal_encoder = EfficientNet.from_name(goal_encoder, in_channels=6) # obs+goal
+            self.goal_encoder = replace_bn_with_gn(self.goal_encoder)
+            self.num_goal_features = self.goal_encoder._fc.in_features
+            self.goal_encoder_type = "efficientnet"
+        else:
+            raise NotImplementedError
+        
         self.goal_encoder = replace_bn_with_gn(self.goal_encoder)
         self.num_goal_features = self.goal_encoder._fc.in_features
 

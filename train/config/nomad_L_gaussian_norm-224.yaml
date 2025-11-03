@@ -57,7 +57,7 @@ action:
 
 # action output params
 len_traj_pred: 8
-learn_angle: False
+
 
 # dataset specific parameters
 image_size: [224, 224] # width, height

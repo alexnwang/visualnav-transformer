@@ -137,7 +137,6 @@ def main(rank, world_size, config):
                     max_action_distance=config["action"]["max_dist_cat"],
                     negative_goals=data_config["negative_goals"],
                     len_traj_pred=config["len_traj_pred"],
-                    learn_angle=config["learn_angle"],
                     context_size=config["context_size"],
                     context_type=config["context_type"],
                     end_slack=data_config["end_slack"],
@@ -201,6 +200,7 @@ def main(rank, world_size, config):
     # Create the model
     vision_encoder = NoMaD_ViNT(
         obs_encoder=config["obs_encoder"],
+        goal_encoder=config.get("goal_encoder", "efficientnet-b0"),
         obs_encoding_size=config["encoding_size"],
         context_size=config["context_size"],
         mha_num_attention_heads=config["mha_num_attention_heads"],
