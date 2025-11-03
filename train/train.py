@@ -28,7 +28,7 @@ from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 
 
-from vint_train.data.vint_dataset import ViNT_Dataset, ViNT_Nymeria_Dataset
+from vint_train.data.vint_dataset import ViNT_Nymeria_Dataset
 from vint_train.training.train_eval_loop import (
     train_eval_loop_nomad,
     load_model,

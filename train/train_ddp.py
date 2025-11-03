@@ -26,7 +26,7 @@ from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 
-from vint_train.data.vint_dataset import ViNT_Dataset, ViNT_Nymeria_Dataset
+from vint_train.data.vint_dataset import ViNT_Nymeria_Dataset
 from vint_train.training.train_eval_loop import (
     # train_eval_loop,
     train_eval_loop_nomad,
@@ -131,6 +131,7 @@ def main(rank, world_size, config):
                     image_size=config["image_size"],
                     transform=transform,
                     waypoint_spacing=data_config["waypoint_spacing"],
+                    preserve_pose_up_down=config.get("preserve_pose_up_down", False),
                     min_dist_cat=config["distance"]["min_dist_cat"],
                     max_dist_cat=config["distance"]["max_dist_cat"],
                     min_action_distance=config["action"]["min_dist_cat"],

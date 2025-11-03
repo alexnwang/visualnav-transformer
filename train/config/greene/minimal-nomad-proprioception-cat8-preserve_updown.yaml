@@ -1,8 +1,8 @@
-project_name: test
-run_name: test
+project_name: nomad-minimal
+run_name: nomad-minimal-proprioception-cat8
 
 # training setup
-use_wandb: False # set to false if you don't want to log to wandb
+use_wandb: True # set to false if you don't want to log to wandb
 train: True
 batch_size: 128
 epochs: 10
@@ -22,15 +22,15 @@ seed: 0
 
 # model params
 model_type: nomad
-encoding_size: 384
+encoding_size: 256
 proprioception: True
 pool_features: True
 # vision enc
 vision_encoder: nomad_vint
-obs_encoder: efficientnet-b1
+obs_encoder: efficientnet-b0
 # vision transformer
-mha_num_attention_heads: 8
-mha_num_attention_layers: 8
+mha_num_attention_heads: 4
+mha_num_attention_layers: 4
 mha_ff_dim_factor: 4
 # denoiser
 down_dims: [256, 384, 512]

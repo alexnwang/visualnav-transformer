@@ -25,11 +25,12 @@ from vint_train.data.data_utils import (
 from vint_train.data.misc import XSensConstants
 from vint_train.training.nymeria_training_utils import get_delta_smpl, normalize_data_smpl_pose, normalize_data_smpl_pose_gaussian, set_gaussian_stats
 
-class ViNT_Dataset(Dataset):
+class ViNT_Nymeria_Dataset(Dataset):
     def __init__(
         self,
         data_folder: str,
         data_split_folder: str,
+        gaussian_normalization_stats_path: str,
         dataset_name: str,
         image_size: Tuple[int, int],
         transform: transforms,
@@ -41,12 +42,12 @@ class ViNT_Dataset(Dataset):
         negative_goals: bool,
         len_traj_pred: int,
         context_size: int,
-        preserve_pose_up_down: bool,
+        preserve_pose_up_down: bool = False,
         context_type: str = "temporal",
         end_slack: int = 0,
         goals_per_obs: int = 1,
         normalize: bool = True,
-        obs_type: str = "image",
+        obs_type: str = "png",
         goal_type: str = "image",
     ):
         """
@@ -55,6 +56,7 @@ class ViNT_Dataset(Dataset):
         Args:
             data_folder (string): Directory with all the image data
             data_split_folder (string): Directory with filepaths.txt, a list of all trajectory names in the dataset split that are each seperated by a newline
+            gaussian_normalization_stats_path (string): Path to the Gaussian normalization stats file.
             dataset_name (string): Name of the dataset [recon, go_stanford, scand, tartandrive, etc.]
             image_size (tuple): Size of the image to load.
             transform (transform): Transform to apply to the image.
@@ -77,6 +79,8 @@ class ViNT_Dataset(Dataset):
         self.data_folder = data_folder
         self.data_split_folder = data_split_folder
         self.dataset_name = dataset_name
+        
+        self.traj_len_key = "all_parts"
         
         traj_names_file = os.path.join(data_split_folder, "traj_names.txt")
         with open(traj_names_file, "r") as f:
@@ -111,6 +115,7 @@ class ViNT_Dataset(Dataset):
         self.normalize = normalize
         self.obs_type = obs_type
         self.goal_type = goal_type
+        self.preserve_pose_up_down = preserve_pose_up_down
 
         # load data/data_config.yaml
         with open(
@@ -139,6 +144,41 @@ class ViNT_Dataset(Dataset):
             action_stats = self.data_config['action_stats']
         for key in action_stats:
             self.ACTION_STATS[key] = np.expand_dims(all_data_config['action_stats'][key], axis=0)
+        
+        self._init_nymeria(gaussian_normalization_stats_path=gaussian_normalization_stats_path)
+
+    def _init_nymeria(self, full_body: bool = False, gaussian_normalization_stats_path: str = None):
+        if full_body:
+            self.num_segments = XSensConstants.num_parts
+        else:
+            self.num_segments = XSensConstants.upper_body_num_parts
+        
+        # self._compute_actions = self._compute_actions_nymeria_smpl
+        # self.normalize_data = normalize_data_smpl_pose
+        # self.get_deltas = get_delta_smpl
+        # self._compute_actions_smpl_relpelvis = self._compute_actions_nymeria_smpl_relpelvis
+    
+        if gaussian_normalization_stats_path is not None:
+            f = None
+            try:
+                f = open(gaussian_normalization_stats_path)
+            except FileNotFoundError:
+                print("action stats not found, using default values")
+            if f is not None:
+                stats_json = json.load(f)
+                stats_dict = {"mean": stats_json['pelvis_xyz']['mean'], "var": stats_json['pelvis_xyz']['var']}
+                
+                for part_name in XSensConstants.part_names[:XSensConstants.upper_body_num_parts]:
+                    stats_dict["mean"] += stats_json['rpy'][part_name]['mean']
+                    stats_dict["var"] += stats_json['rpy'][part_name]['var']
+                
+                self.ACTION_STATS = {
+                    "mean": torch.tensor(stats_dict["mean"], dtype=torch.float32),
+                    "var": torch.tensor(stats_dict["var"], dtype=torch.float32)
+                }
+                
+                self.normalize_data = normalize_data_smpl_pose_gaussian
+                set_gaussian_stats(self.ACTION_STATS)
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -259,39 +299,6 @@ class ViNT_Dataset(Dataset):
             return img_path_to_data(image_bytes, self.image_size)
         except TypeError:
             print(f"Failed to load image {image_path}")
-
-    def _compute_actions(self, traj_data, curr_time, goal_time):
-        start_index = curr_time
-        end_index = curr_time + self.len_traj_pred * self.waypoint_spacing + 1
-        yaw = traj_data["yaw"][start_index:end_index:self.waypoint_spacing]
-        positions = traj_data["position"][start_index:end_index:self.waypoint_spacing]
-        goal_pos = traj_data["position"][min(goal_time, len(traj_data["position"]) - 1)]
-
-        if len(yaw.shape) == 2:
-            yaw = yaw.squeeze(1)
-
-        if yaw.shape != (self.len_traj_pred + 1,):
-            const_len = self.len_traj_pred + 1 - yaw.shape[0]
-            yaw = np.concatenate([yaw, np.repeat(yaw[-1], const_len)])
-            positions = np.concatenate([positions, np.repeat(positions[-1][None], const_len, axis=0)], axis=0)
-
-        assert yaw.shape == (self.len_traj_pred + 1,), f"{yaw.shape} and {(self.len_traj_pred + 1,)} should be equal"
-        assert positions.shape == (self.len_traj_pred + 1, 2), f"{positions.shape} and {(self.len_traj_pred + 1, 2)} should be equal"
-
-        waypoints = to_local_coords(positions, positions[0], yaw[0])
-        goal_pos = to_local_coords(goal_pos, positions[0], yaw[0])
-
-        assert waypoints.shape == (self.len_traj_pred + 1, 2), f"{waypoints.shape} and {(self.len_traj_pred + 1, 2)} should be equal"
-
-        actions = waypoints[1:]
-        
-        if self.normalize:
-            actions[:, :2] /= self.data_config["metric_waypoint_spacing"] * self.waypoint_spacing
-            goal_pos /= self.data_config["metric_waypoint_spacing"] * self.waypoint_spacing
-
-        assert actions.shape == (self.len_traj_pred, self.num_action_params), f"{actions.shape} and {(self.len_traj_pred, self.num_action_params)} should be equal"
-
-        return actions, goal_pos
     
     def _get_trajectory(self, trajectory_name):
         if trajectory_name in self.trajectory_cache:
@@ -304,15 +311,6 @@ class ViNT_Dataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.index_to_data)
-    
-    def normalize_data(self, data: torch.Tensor, stats: Dict[str, Any]) -> torch.Tensor:
-        raise NotImplementedError("This method should be implemented in subclasses or mixins.")
-    
-    def _compute_actions_smpl_relpelvis(self, traj_data, curr_time, goal_time):
-        raise NotImplementedError("This method should be implemented in subclasses or mixins.")
-
-    def get_deltas(self, actions: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError("This method should be implemented in subclasses or mixins.")
 
     def __getitem__(self, i: int) -> Tuple[torch.Tensor]:
         """
@@ -363,7 +361,7 @@ class ViNT_Dataset(Dataset):
         assert goal_time < goal_traj_len, f"{goal_time} an {goal_traj_len}"
 
         # Compute actions
-        actions, goal_pos = self._compute_actions(curr_traj_data, curr_time, goal_time)
+        actions, goal_pos = self._compute_actions_nymeria_smpl(curr_traj_data, curr_time, goal_time)
         
         # Compute distances
         if goal_is_negative:
@@ -377,17 +375,17 @@ class ViNT_Dataset(Dataset):
         # Compute context poses
         context_poses = []
         for f, t in context:
-            context_poses.append(self._compute_actions_smpl_relpelvis(curr_traj_data, t, t)[1])
+            context_poses.append(self._compute_actions_nymeria_smpl_relpelvis(curr_traj_data, t, t, preserve_pose_up_down=self.preserve_pose_up_down)[1])
         context_poses = torch.cat(context_poses, dim=0)
         
         # get deltas from actions and normalize
-        deltas_torch = self.get_deltas(actions_torch, num_segments=self.num_segments)
+        deltas_torch = get_delta_smpl(actions_torch, num_segments=self.num_segments)
         
         # normalize goals as well
         goal_pos = torch.as_tensor(goal_pos, dtype=torch.float32)
         
         # load first pose for visualizations
-        _, first_pose = self._compute_actions_smpl_relpelvis(curr_traj_data, curr_time, curr_time)
+        _, first_pose = self._compute_actions_nymeria_smpl_relpelvis(curr_traj_data, curr_time, curr_time, preserve_pose_up_down=True)
         if self.normalize:
             deltas_torch = self.normalize_data(deltas_torch, self.ACTION_STATS)
             # only deltas should be normalized as it is the output of the model.
@@ -416,40 +414,6 @@ class ViNT_Dataset(Dataset):
             goal_image.type(torch.float32),
         )
 
-class NymeriaMixin:
-    def _init_nymeria(self, full_body: bool = False, gaussian_normalization_stats_path: str = None):
-        if full_body:
-            self.num_segments = XSensConstants.num_parts
-        else:
-            self.num_segments = XSensConstants.upper_body_num_parts
-        
-        self._compute_actions = self._compute_actions_nymeria_smpl
-        self.normalize_data = normalize_data_smpl_pose
-        self.get_deltas = get_delta_smpl
-        self._compute_actions_smpl_relpelvis = self._compute_actions_nymeria_smpl_relpelvis
-    
-        if gaussian_normalization_stats_path is not None:
-            f = None
-            try:
-                f = open(gaussian_normalization_stats_path)
-            except FileNotFoundError:
-                print("action stats not found, using default values")
-            if f is not None:
-                stats_json = json.load(f)
-                stats_dict = {"mean": stats_json['pelvis_xyz']['mean'], "var": stats_json['pelvis_xyz']['var']}
-                
-                for part_name in XSensConstants.part_names[:XSensConstants.upper_body_num_parts]:
-                    stats_dict["mean"] += stats_json['rpy'][part_name]['mean']
-                    stats_dict["var"] += stats_json['rpy'][part_name]['var']
-                
-                self.ACTION_STATS = {
-                    "mean": torch.tensor(stats_dict["mean"], dtype=torch.float32),
-                    "var": torch.tensor(stats_dict["var"], dtype=torch.float32)
-                }
-                
-                self.normalize_data = normalize_data_smpl_pose_gaussian
-                set_gaussian_stats(self.ACTION_STATS)
-    
     def _get_trajectory(self, trajectory_name):
         traj_data = torch.load(os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'), weights_only=False)
         for k, v in traj_data.items():
@@ -503,7 +467,7 @@ class NymeriaMixin:
         
         return actions, goal
     
-    def _compute_actions_nymeria_smpl_relpelvis(self, traj_data, curr_time, goal_time):
+    def _compute_actions_nymeria_smpl_relpelvis(self, traj_data, curr_time, goal_time, preserve_pose_up_down: bool=False):
         start_index = curr_time
         end_index = curr_time + self.len_traj_pred + 1
         goal_time = [min(goal_time, len(traj_data['all_parts']) - 1)]
@@ -525,6 +489,11 @@ class NymeriaMixin:
         actions_rot = R.from_quat(actions_quat, scalar_first=True)
         goals_rot = R.from_quat(goals_quat, scalar_first=True)
         
+        if preserve_pose_up_down: # zero out roll and pitch
+            start_euler = start_rot.as_euler('xyz', degrees=False) # (1, 3)
+            start_euler[:, 0], start_euler[:, 1] = 0., 0.
+            start_rot = R.from_euler('xyz', start_euler, degrees=False)
+        
         rel_actions_xyz = to_local_coords_3d(actions_xyz, start_xyz, start_quat).unflatten(0, (actions_T, self.num_segments))
         rel_goals_xyz = to_local_coords_3d(goals_xyz, start_xyz, start_quat).unflatten(0, (1, self.num_segments))
         
@@ -545,10 +514,3 @@ class NymeriaMixin:
         goal = torch.cat((goal_root_xyz, rel_goals_eulerxyz), dim=-1)
         
         return actions, goal
-
-class ViNT_Nymeria_Dataset(NymeriaMixin, ViNT_Dataset):
-    def __init__(self, *args, gaussian_normalization_stats_path=None, **kwargs):
-        self.traj_len_key = "all_parts"
-        
-        super().__init__(*args, **kwargs, obs_type="png")
-        self._init_nymeria(gaussian_normalization_stats_path=gaussian_normalization_stats_path)
