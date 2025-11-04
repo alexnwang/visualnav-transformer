@@ -131,7 +131,7 @@ def main(rank, world_size, config):
                     image_size=config["image_size"],
                     transform=transform,
                     waypoint_spacing=data_config["waypoint_spacing"],
-                    preserve_pose_up_down=config.get("preserve_pose_up_down", False),
+                    preserve_pose_up_down=data_config.get("preserve_pose_up_down", False),
                     min_dist_cat=config["distance"]["min_dist_cat"],
                     max_dist_cat=config["distance"]["max_dist_cat"],
                     min_action_distance=config["action"]["min_dist_cat"],

@@ -385,7 +385,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         goal_pos = torch.as_tensor(goal_pos, dtype=torch.float32)
         
         # load first pose for visualizations
-        _, first_pose = self._compute_actions_nymeria_smpl_relpelvis(curr_traj_data, curr_time, curr_time, preserve_pose_up_down=True)
+        _, first_pose = self._compute_actions_nymeria_smpl_relpelvis(curr_traj_data, curr_time, curr_time, preserve_pose_up_down=self.preserve_pose_up_down)
         if self.normalize:
             deltas_torch = self.normalize_data(deltas_torch, self.ACTION_STATS)
             # only deltas should be normalized as it is the output of the model.
