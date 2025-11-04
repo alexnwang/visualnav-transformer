@@ -418,6 +418,7 @@ def evaluate_nomad(
         
         batch_obs_images = batch_obs_images.to(device, non_blocking=True)
         batch_goal_images = batch_goal_images.to(device, non_blocking=True)
+        context_poses = context_poses.to(device, non_blocking=True)
         batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
         batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
 
@@ -498,7 +499,7 @@ def evaluate_nomad(
             noise_scheduler,
             batch_obs_images,
             batch_goal_images,
-            first_pose,
+            context_poses,
             pred_horizon=deltas.shape[1],
             action_dim=deltas.shape[2],
             num_samples=1,
