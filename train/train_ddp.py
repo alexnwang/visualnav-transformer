@@ -144,7 +144,7 @@ def main(rank, world_size, config):
                     goals_per_obs=data_config["goals_per_obs"],
                     normalize=config["normalize"],
                     goal_type=config["goal_type"],
-                    gaussian_normalization_stats_path= data_config.get("gaussian_normalization_stats_path", None),
+                    gaussian_normalization_stats_path=data_config["gaussian_normalization_stats_path"],
                 )
                 
                 if data_config.get("repeat", 1) > 1:
@@ -201,7 +201,6 @@ def main(rank, world_size, config):
     # Create the model
     vision_encoder = NoMaD_ViNT(
         obs_encoder=config["obs_encoder"],
-        goal_encoder=config.get("goal_encoder", "efficientnet-b0"),
         obs_encoding_size=config["encoding_size"],
         context_size=config["context_size"],
         mha_num_attention_heads=config["mha_num_attention_heads"],

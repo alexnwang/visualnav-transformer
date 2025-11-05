@@ -5,13 +5,13 @@ import torchvision
 from typing import List, Dict, Optional, Tuple, Callable
 from efficientnet_pytorch import EfficientNet
 from vint_train.models.vint.self_attention import PositionalEncoding
+import timm
 
 class NoMaD_ViNT(nn.Module):
     def __init__(
         self,
         context_size: int = 5,
         obs_encoder: Optional[str] = "efficientnet-b0",
-        goal_encoder: Optional[str] = "efficientnet-b0",
         obs_encoding_size: Optional[int] = 512,
         mha_num_attention_heads: Optional[int] = 2,
         mha_num_attention_layers: Optional[int] = 2,
@@ -30,26 +30,24 @@ class NoMaD_ViNT(nn.Module):
         self.pool_features = pool_features
         self.proprioception = proprioception
         
-        # Initialize the observation encoder
-        if obs_encoder.split("-")[0] == "efficientnet":
+        if "efficientnet" in obs_encoder:
+            # Initialize the observation encoder
             self.obs_encoder = EfficientNet.from_name(obs_encoder, in_channels=3) # context
             self.obs_encoder = replace_bn_with_gn(self.obs_encoder)
             self.num_obs_features = self.obs_encoder._fc.in_features
-            self.obs_encoder_type = "efficientnet"
-        else:
-            raise NotImplementedError
-        
-        # Initialize the goal encoder
-        if goal_encoder.split("-")[0] == "efficientnet":
+            self.encoder_type = "efficientnet"
+            # Initialize the goal encoder
             self.goal_encoder = EfficientNet.from_name(goal_encoder, in_channels=6) # obs+goal
             self.goal_encoder = replace_bn_with_gn(self.goal_encoder)
             self.num_goal_features = self.goal_encoder._fc.in_features
-            self.goal_encoder_type = "efficientnet"
-        else:
-            raise NotImplementedError
-        
-        self.goal_encoder = replace_bn_with_gn(self.goal_encoder)
-        self.num_goal_features = self.goal_encoder._fc.in_features
+        elif "dinov3" in obs_encoder:
+            model = timm.create_model('vit_small_plus_patch16_dinov3.lvd1689m', pretrained=True)
+            model.eval()
+            for param in model.parameters():
+                param.requires_grad = False
+            self.encoder = model
+            self.num_goal_features = self.num_obs_features = model.num_features
+            self.encoder_type = obs_encoder
 
         # Initialize compression layers if necessary
         if self.num_obs_features != self.obs_encoding_size:
@@ -89,6 +87,39 @@ class NoMaD_ViNT(nn.Module):
         self.avg_pool_mask = torch.cat([1 - self.no_mask.float(), (1 - self.goal_mask.float()) * ((self.context_size + 2)/(self.context_size + 1))], dim=0)
 
 
+    def extract_features(self, img: torch.tensor, mode="obs" or "goal") -> torch.tensor:
+        """
+        Extract features from the image using the encoder.
+        Args:
+            img: torch.tensor, the image to extract features from.
+            mode: str, "obs" or "goal".
+        Returns:
+            torch.tensor, the extracted features. Shape: N, L, D, L=1 if pool_features=True
+        """
+        assert mode in ["obs", "goal"], "Invalid mode"
+        if self.encoder_type == "efficientnet":
+            encoder = self.goal_encoder if mode == "goal" else self.obs_encoder
+            compress_enc = self.compress_goal_enc if mode == "goal" else self.compress_obs_enc
+            encoding = encoder.extract_features(img)
+            if self.pool_features:
+                encoding = encoder._avg_pooling(encoding)
+            encoding = encoding.flatten(start_dim=2)
+            if encoder._global_params.include_top:
+                encoding = encoder._dropout(encoding)
+            encoding = encoding.permute(0, 2, 1) # N, L, D
+            encoding = compress_enc(encoding)
+            return encoding
+        elif "dinov3" in self.encoder_type:
+            encoder = self.encoder 
+            compress_enc = self.compress_obs_enc if mode == "obs" else self.compress_goal_enc
+            with torch.no_grad():
+                if self.pool_features:
+                    encoding = encoder(img)[:, None]
+                else:
+                    encoding = encoder.forward_features(img)
+            encoding = compress_enc(encoding)
+            return encoding
+
     def forward(self, obs_img: torch.tensor, goal_img: torch.tensor,
                 input_goal_mask: torch.tensor = None,
                 context_poses: torch.tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -106,29 +137,14 @@ class NoMaD_ViNT(nn.Module):
             goal_mask = input_goal_mask.to(device)
 
         # Get the goal encoding
-        obsgoal_img = torch.cat([obs_img[:, self.context_size], goal_img], dim=1) # concatenate the obs image/context and goal image --> non image goal?
-        obsgoal_encoding = self.goal_encoder.extract_features(obsgoal_img) # get encoding of this img  # torch.Size([B, 1280, 3, 3])
-        if self.pool_features:
-            obsgoal_encoding = self.goal_encoder._avg_pooling(obsgoal_encoding) # avg pooling 
-        obsgoal_encoding = obsgoal_encoding.flatten(start_dim=2) # B, 1280, L
-        if self.goal_encoder._global_params.include_top:
-            obsgoal_encoding = self.goal_encoder._dropout(obsgoal_encoding)
-        obsgoal_encoding = obsgoal_encoding.permute(0, 2, 1) # B, L, 1280
-        obsgoal_encoding = self.compress_goal_enc(obsgoal_encoding)
-        goal_encoding = obsgoal_encoding
+        obsgoal_img = torch.cat([obs_img[:, self.context_size], goal_img], dim=1) if self.encoder_type == "efficientnet" else goal_img
+        goal_encoding = self.extract_features(obsgoal_img, mode="goal")
         
         # Get the observation encoding
         B, Cplus1 = obs_img.shape[:2]
         obs_img = obs_img.flatten(0, 1) # B*(C+1), 3, *image_size
-        obs_encoding = self.obs_encoder.extract_features(obs_img) # B*(C+1), 1280, *image_size/32
-        if self.pool_features:
-            obs_encoding = self.obs_encoder._avg_pooling(obs_encoding) # B*(C+1), 1280, 1, 1
-        obs_encoding = obs_encoding.flatten(start_dim=2) # B*(C+1), 1280, L
-        L = obs_encoding.shape[-1]
-        if self.obs_encoder._global_params.include_top:
-            obs_encoding = self.obs_encoder._dropout(obs_encoding)
-        obs_encoding = self.compress_obs_enc(obs_encoding.permute(0, 2, 1)) # B*(C+1), L, self.obs_encoding_size
-        obs_encoding = obs_encoding.reshape((B, Cplus1, -1, self.obs_encoding_size))
+        obs_encoding = self.extract_features(obs_img, mode="obs").unflatten(0, (B, Cplus1)) # B, (C+1), L, self.obs_encoding_size
+        L = obs_encoding.shape[2]
         if self.proprioception:
             obs_encoding = obs_encoding + encoded_context_pose[:, :, None]
         
