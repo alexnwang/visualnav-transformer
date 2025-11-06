@@ -37,10 +37,10 @@ class NoMaD_ViNT(nn.Module):
             self.num_obs_features = self.obs_encoder._fc.in_features
             self.encoder_type = "efficientnet"
             # Initialize the goal encoder
-            self.goal_encoder = EfficientNet.from_name(goal_encoder, in_channels=6) # obs+goal
+            self.goal_encoder = EfficientNet.from_name(obs_encoder, in_channels=6) # obs+goal
             self.goal_encoder = replace_bn_with_gn(self.goal_encoder)
             self.num_goal_features = self.goal_encoder._fc.in_features
-        elif "dinov3" in obs_encoder:
+        elif "dinov3-s" in obs_encoder:
             model = timm.create_model('vit_small_plus_patch16_dinov3.lvd1689m', pretrained=True)
             model.eval()
             for param in model.parameters():
@@ -48,6 +48,16 @@ class NoMaD_ViNT(nn.Module):
             self.encoder = model
             self.num_goal_features = self.num_obs_features = model.num_features
             self.encoder_type = obs_encoder
+        elif "resnet50" in obs_encoder:
+            model = timm.create_model('resnet50', pretrained=True)
+            model.eval()
+            for param in model.parameters():
+                param.requires_grad = False
+            self.encoder = model
+            self.num_goal_features = self.num_obs_features = model.num_features
+            self.encoder_type = obs_encoder
+        else:
+            raise ValueError(f"Invalid encoder type: {obs_encoder}")
 
         # Initialize compression layers if necessary
         if self.num_obs_features != self.obs_encoding_size:
@@ -109,7 +119,7 @@ class NoMaD_ViNT(nn.Module):
             encoding = encoding.permute(0, 2, 1) # N, L, D
             encoding = compress_enc(encoding)
             return encoding
-        elif "dinov3" in self.encoder_type:
+        elif "dinov3-s" in self.encoder_type:
             encoder = self.encoder 
             compress_enc = self.compress_obs_enc if mode == "obs" else self.compress_goal_enc
             with torch.no_grad():
@@ -117,6 +127,18 @@ class NoMaD_ViNT(nn.Module):
                     encoding = encoder(img)[:, None]
                 else:
                     encoding = encoder.forward_features(img)
+            encoding = compress_enc(encoding)
+            return encoding
+        elif "resnet50" in self.encoder_type:
+            encoder = self.encoder 
+            compress_enc = self.compress_obs_enc if mode == "obs" else self.compress_goal_enc
+            with torch.no_grad():
+                if self.pool_features:
+                    encoding = encoder.forward_features(img)
+                    encoding = encoder.global_pool(encoding)[:, None]
+                else:
+                    encoding = encoder.forward_features(img).flatten(start_dim=2)
+                encoding = encoding.permute(0, 2, 1) # N, L, D
             encoding = compress_enc(encoding)
             return encoding
 

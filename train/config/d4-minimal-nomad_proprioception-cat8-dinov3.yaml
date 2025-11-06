@@ -26,7 +26,7 @@ proprioception: True
 encoding_size: 256
 # vision enc
 vision_encoder: nomad_vint
-obs_encoder: dinov3
+obs_encoder: dinov3-s
 # vision transformer
 mha_num_attention_heads: 4
 mha_num_attention_layers: 4
