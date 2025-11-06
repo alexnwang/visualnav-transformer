@@ -13,8 +13,11 @@
 
 cd /home/anw2067/visualnav-transformer/train
 
+# dinov3 unpool full!
+./torch_run.sh config/greene/minimal-nomad-proprioception-cat8-dinov3_unpool_full.yaml 2
+
 # checking how things work after cat8 and preserve_updown and stuff
-./torch_run.sh config/greene/minimal-nomad-proprioception-cat8.yaml 2
+# ./torch_run.sh config/greene/minimal-nomad-proprioception-cat8.yaml 2
 
 # proprioceptionv2 + bugged preserve_updown code
 # ./torch_run.sh config/greene/minimal-nomad-proprioception-cat8-preserve_updown.yaml 2
