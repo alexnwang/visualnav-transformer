@@ -1,5 +1,5 @@
 project_name: nomad-minimal
-run_name: nomad-minimal-proprioception-cat8
+run_name: nomad-minimal-proprioception-cat8-dinov3_unpool_full
 
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
