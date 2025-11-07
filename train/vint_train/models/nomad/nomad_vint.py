@@ -74,7 +74,13 @@ class NoMaD_ViNT(nn.Module):
         if self.pool_features:
             self.positional_encoding = PositionalEncoding(self.obs_encoding_size, max_seq_len=self.context_size + 2)
         else:
-            num_patches = (image_size[0] // 32) * (image_size[1] // 32)
+            if self.encoder_type == "efficientnet":
+                num_patches = (image_size[0] // 32) * (image_size[1] // 32)
+            elif "dinov3-s" in self.encoder_type:
+                num_patches = (image_size[0] // 16) * (image_size[1] // 16) + self.encoder.num_prefix_tokens
+            elif "resnet50" in self.encoder_type:
+                num_patches = (image_size[0] // 32) * (image_size[1] // 32)
+                
             self.positional_encoding = PositionalEncoding(self.obs_encoding_size, max_seq_len=(self.context_size + 2) * num_patches)
         self.sa_layer = nn.TransformerEncoderLayer(
             d_model=self.obs_encoding_size, 
