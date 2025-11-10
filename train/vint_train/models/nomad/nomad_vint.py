@@ -19,6 +19,7 @@ class NoMaD_ViNT(nn.Module):
         pool_features: Optional[bool] = True,
         image_size: Optional[Tuple[int, int]] = (224, 224),
         proprioception: Optional[bool] = False,
+        project_encoding: Optional[bool] = False,
     ) -> None:
         """
         NoMaD ViNT Encoder class
@@ -29,6 +30,7 @@ class NoMaD_ViNT(nn.Module):
         self.context_size = context_size
         self.pool_features = pool_features
         self.proprioception = proprioception
+        self.project_encoding = project_encoding
         
         if "efficientnet" in obs_encoder:
             # Initialize the observation encoder
@@ -60,13 +62,27 @@ class NoMaD_ViNT(nn.Module):
             raise ValueError(f"Invalid encoder type: {obs_encoder}")
 
         # Initialize compression layers if necessary
-        if self.num_obs_features != self.obs_encoding_size:
-            self.compress_obs_enc = nn.Linear(self.num_obs_features, self.obs_encoding_size)
+        if self.num_obs_features != self.obs_encoding_size or project_encoding:
+            if project_encoding:
+                self.compress_obs_enc = nn.Sequential(
+                    nn.Linear(self.num_obs_features, 4*self.obs_encoding_size),
+                    nn.GELU(),
+                    nn.Linear(4*self.obs_encoding_size, self.obs_encoding_size),
+                )
+            else:
+                self.compress_obs_enc = nn.Linear(self.num_obs_features, self.obs_encoding_size)
         else:
             self.compress_obs_enc = nn.Identity()
         
-        if self.num_goal_features != self.goal_encoding_size:
-            self.compress_goal_enc = nn.Linear(self.num_goal_features, self.goal_encoding_size)
+        if self.num_goal_features != self.goal_encoding_size or project_encoding:
+            if project_encoding:
+                self.compress_goal_enc = nn.Sequential(
+                    nn.Linear(self.num_goal_features, 4*self.goal_encoding_size),
+                    nn.GELU(),
+                    nn.Linear(4*self.goal_encoding_size, self.goal_encoding_size),
+                )
+            else:
+                self.compress_goal_enc = nn.Linear(self.num_goal_features, self.goal_encoding_size)
         else:
             self.compress_goal_enc = nn.Identity()
 

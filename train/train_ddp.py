@@ -209,6 +209,7 @@ def main(rank, world_size, config):
         pool_features=config.get("pool_features", True),
         image_size=config["image_size"],
         proprioception=config.get("proprioception", False),
+        project_encoding=config.get("project_encoding", False),
     )
     vision_encoder = replace_bn_with_gn(vision_encoder)
     
