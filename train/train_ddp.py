@@ -210,6 +210,8 @@ def main(rank, world_size, config):
         image_size=config["image_size"],
         proprioception=config.get("proprioception", False),
         project_encoding=config.get("project_encoding", False),
+        pos_enc_3d=config.get("pos_enc_3d", False),
+        pool_curr_obs=config.get("pool_curr_obs", False),
     )
     vision_encoder = replace_bn_with_gn(vision_encoder)
     

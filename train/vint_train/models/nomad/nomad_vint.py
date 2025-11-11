@@ -5,6 +5,7 @@ import torchvision
 from typing import List, Dict, Optional, Tuple, Callable
 from efficientnet_pytorch import EfficientNet
 from vint_train.models.vint.self_attention import PositionalEncoding
+from vint_train.models.vint.positional_embeddings import get_3d_sincos_pos_embed
 import timm
 
 class NoMaD_ViNT(nn.Module):
@@ -20,6 +21,8 @@ class NoMaD_ViNT(nn.Module):
         image_size: Optional[Tuple[int, int]] = (224, 224),
         proprioception: Optional[bool] = False,
         project_encoding: Optional[bool] = False,
+        pos_enc_3d: Optional[bool] = False,
+        pool_curr_obs: Optional[bool] = False,
     ) -> None:
         """
         NoMaD ViNT Encoder class
@@ -31,6 +34,8 @@ class NoMaD_ViNT(nn.Module):
         self.pool_features = pool_features
         self.proprioception = proprioception
         self.project_encoding = project_encoding
+        self.pos_enc_3d = pos_enc_3d
+        self.pool_curr_obs = pool_curr_obs
         
         if "efficientnet" in obs_encoder:
             # Initialize the observation encoder
@@ -88,16 +93,29 @@ class NoMaD_ViNT(nn.Module):
 
         # Initialize positional encoding and self-attention layers
         if self.pool_features:
+            assert not self.pos_enc_3d, "3D positional encoding is not supported for pooled features"
             self.positional_encoding = PositionalEncoding(self.obs_encoding_size, max_seq_len=self.context_size + 2)
         else:
             if self.encoder_type == "efficientnet":
-                num_patches = (image_size[0] // 32) * (image_size[1] // 32)
+                downsample_factor, prefix_tokens = 32, 0    
             elif "dinov3-s" in self.encoder_type:
-                num_patches = (image_size[0] // 16) * (image_size[1] // 16) + self.encoder.num_prefix_tokens
+                downsample_factor, prefix_tokens = 16, self.encoder.num_prefix_tokens
             elif "resnet50" in self.encoder_type:
-                num_patches = (image_size[0] // 32) * (image_size[1] // 32)
+                downsample_factor, prefix_tokens = 32, 0
                 
-            self.positional_encoding = PositionalEncoding(self.obs_encoding_size, max_seq_len=(self.context_size + 2) * num_patches)
+            if not self.pos_enc_3d:
+                num_patches = (image_size[0] // downsample_factor) * (image_size[1] // downsample_factor)
+                if "dinov3" in self.encoder_type:
+                    num_patches += self.encoder.num_prefix_tokens
+                self.positional_encoding = PositionalEncoding(self.obs_encoding_size, max_seq_len=(self.context_size + 2) * num_patches)
+            else:
+                positional_encoding = torch.from_numpy(
+                    get_3d_sincos_pos_embed(self.obs_encoding_size,
+                                            grid_size=image_size[0] // downsample_factor,
+                                            grid_depth=self.context_size + 2, n_prefix_tokens=prefix_tokens, cls_token=False, uniform_power=True)
+                ).to(torch.float32)
+                self.register_buffer('positional_encoding', positional_encoding)
+        
         self.sa_layer = nn.TransformerEncoderLayer(
             d_model=self.obs_encoding_size, 
             nhead=mha_num_attention_heads, 
@@ -205,16 +223,26 @@ class NoMaD_ViNT(nn.Module):
             src_key_padding_mask = None
         
         # Apply positional encoding 
-        if self.positional_encoding:
-            obs_encoding = self.positional_encoding(obs_encoding)
+        if self.positional_encoding is not None:
+            if not self.pos_enc_3d:
+                obs_encoding = self.positional_encoding(obs_encoding)
+            else:
+                obs_encoding = obs_encoding + self.positional_encoding[None]
 
         obs_encoding_tokens = self.sa_encoder(obs_encoding, src_key_padding_mask=src_key_padding_mask)
-        if src_key_padding_mask is not None:
-            avg_mask = torch.index_select(self.avg_pool_mask.to(device), 0, no_goal_mask).unsqueeze(-1)
-            if not self.pool_features:
-                avg_mask = avg_mask.repeat(1, 1, L).flatten(1, 2)[..., None] / L
-            obs_encoding_tokens = obs_encoding_tokens * avg_mask
-        obs_encoding_tokens = torch.mean(obs_encoding_tokens, dim=1)
+        
+        if not self.pool_curr_obs:
+            if src_key_padding_mask is not None:
+                avg_mask = torch.index_select(self.avg_pool_mask.to(device), 0, no_goal_mask).unsqueeze(-1) # B, (C+2)*L, D
+                if not self.pool_features:
+                    avg_mask = avg_mask.repeat(1, 1, L).flatten(1, 2)[..., None] / L
+                obs_encoding_tokens = obs_encoding_tokens * avg_mask
+            obs_encoding_tokens = torch.mean(obs_encoding_tokens, dim=1)
+        else:
+            curr_goal_tokens = obs_encoding_tokens[:, -2*L:] # B, 2*L, D where the 2*L tokens are the current and goal tokens
+            avg_mask = (~src_key_padding_mask[:, -2*L:, None]).float()
+            obs_encoding_tokens = (curr_goal_tokens * avg_mask).mean(dim=1) / avg_mask.sum(dim=1)
+            
         return obs_encoding_tokens
 
 # Utils for Group Norm
