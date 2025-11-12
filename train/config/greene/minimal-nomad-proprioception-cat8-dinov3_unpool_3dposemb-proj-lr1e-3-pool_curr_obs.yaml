@@ -1,5 +1,5 @@
 project_name: nomad-minimal
-run_name: nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3
+run_name: nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs
 
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb

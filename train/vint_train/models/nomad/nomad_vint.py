@@ -241,7 +241,7 @@ class NoMaD_ViNT(nn.Module):
         else:
             curr_goal_tokens = obs_encoding_tokens[:, -2*L:] # B, 2*L, D where the 2*L tokens are the current and goal tokens
             avg_mask = (~src_key_padding_mask[:, -2*L:, None]).float()
-            obs_encoding_tokens = (curr_goal_tokens * avg_mask).mean(dim=1) / avg_mask.sum(dim=1)
+            obs_encoding_tokens = (curr_goal_tokens * avg_mask).sum(dim=1) / avg_mask.sum(dim=1)
             
         return obs_encoding_tokens
 
