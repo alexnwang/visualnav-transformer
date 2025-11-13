@@ -1,4 +1,4 @@
-project_name: nomad-minimal
+project_name: nomad-minimal-regression
 run_name: regression-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs
 
 # training setup
