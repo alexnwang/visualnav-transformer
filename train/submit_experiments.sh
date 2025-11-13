@@ -1,8 +1,13 @@
 #!/bin/bash
 
+# 11/13/2025 trying to train a regression model
+# ./submit_scripts/submit_torch.sh config/torch/regression-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs.yaml 4
+./submit_scripts/submit_torch.sh config/torch/regression-proprioception-cat4-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs.yaml 4
+./submit_scripts/submit_torch.sh config/torch/regression-proprioception-cat2-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs.yaml 4
+
 # 11/12/2025 trying to improve unpooled representations using 3dposembed and pooling only the current/goal observations
-./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs.yaml 4
-./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3.yaml 4
+# ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs.yaml 4
+# ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3.yaml 4
 
 ################################
 ## Greene experiments         ##

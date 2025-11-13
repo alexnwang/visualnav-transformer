@@ -182,9 +182,9 @@ def train_nomad(
             context_poses, # context poses shape: torch.Size([256, (context_size+1), 48]) # 3 context poses + current, each with 48 dimensions
             distance, # distance shape: torch.Size([256])
             goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
-            dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
             action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
             first_pose, # first_pose shape: torch.Size([256, 1, 48]),
+            gt_actions_with_initial, # gt_actions_with_initial shape: torch.Size([256, 1, 48]),
             obs_images, # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
             goal_image, # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
         ) = data
@@ -409,9 +409,9 @@ def evaluate_nomad(
             context_poses, # context_poses shape: torch.Size([256, context_size+1, 45]) # context poses
             distance, # distance shape: torch.Size([256])
             goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
-            dataset_idx, # dataset_idx shape: torch.Size([256]) # which dataset?
             action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
             first_pose, # first_pose shape: torch.Size([256, 1, 48]),
+            gt_actions_with_initial, # gt_actions_with_initial shape: torch.Size([256, 1, 48]),
             obs_images, # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
             goal_image, # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
         ) = data

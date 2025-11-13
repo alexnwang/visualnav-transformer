@@ -22,15 +22,18 @@ from diffusers.optimization import get_scheduler
 """
 IMPORT YOUR MODEL HERE
 """
+from vint_train.models.regression.regression_model import RegressionModel
 from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 
 from vint_train.data.vint_dataset import ViNT_Nymeria_Dataset
 from vint_train.training.train_eval_loop import (
-    # train_eval_loop,
     train_eval_loop_nomad,
     load_model,
+)
+from vint_train.training.train_eval_loop_regression import (
+    train_eval_loop_regression,
 )
 
 
@@ -198,47 +201,38 @@ def main(rank, world_size, config):
         )
 
     print("Creating model...")
-    # Create the model
-    vision_encoder = NoMaD_ViNT(
-        obs_encoder=config["obs_encoder"],
-        obs_encoding_size=config["encoding_size"],
-        context_size=config["context_size"],
-        mha_num_attention_heads=config["mha_num_attention_heads"],
-        mha_num_attention_layers=config["mha_num_attention_layers"],
-        mha_ff_dim_factor=config["mha_ff_dim_factor"],
-        pool_features=config.get("pool_features", True),
-        image_size=config["image_size"],
-        proprioception=config.get("proprioception", False),
-        project_encoding=config.get("project_encoding", False),
-        pos_enc_3d=config.get("pos_enc_3d", False),
-        pool_curr_obs=config.get("pool_curr_obs", False),
-    )
-    vision_encoder = replace_bn_with_gn(vision_encoder)
-    
-    global_cond_dim = config["encoding_size"]
-    # if config.get("proprioception", False):
-    #     global_cond_dim += 45
-    
-    noise_pred_net = ConditionalUnet1D(
-            input_dim=config['input_dims'],
-            global_cond_dim=global_cond_dim,
-            down_dims=config["down_dims"],
-            cond_predict_scale=config["cond_predict_scale"],
+    def get_vision_encoder():
+        vision_encoder = NoMaD_ViNT(
+            obs_encoder=config["obs_encoder"],
+            obs_encoding_size=config["encoding_size"],
+            context_size=config["context_size"],
+            mha_num_attention_heads=config["mha_num_attention_heads"],
+            mha_num_attention_layers=config["mha_num_attention_layers"],
+            mha_ff_dim_factor=config["mha_ff_dim_factor"],
+            pool_features=config.get("pool_features", True),
+            image_size=config["image_size"],
+            proprioception=config.get("proprioception", False),
+            project_encoding=config.get("project_encoding", False),
+            pos_enc_3d=config.get("pos_enc_3d", False),
+            pool_curr_obs=config.get("pool_curr_obs", False),
         )
-    dist_pred_network = DenseNetwork(embedding_dim=config["encoding_size"])
-    
-    model = NoMaD(
-        vision_encoder=vision_encoder,
-        noise_pred_net=noise_pred_net,
-        dist_pred_net=dist_pred_network,
-    )
-
-    noise_scheduler = DDPMScheduler(
-        num_train_timesteps=config["num_diffusion_iters"],
-        beta_schedule='squaredcos_cap_v2',
-        clip_sample=True,
-        prediction_type='epsilon'
-    )
+        vision_encoder = replace_bn_with_gn(vision_encoder)
+        return vision_encoder
+    # Create the model
+    if config['model_type'] == 'nomad':
+        vision_encoder = get_vision_encoder()
+        noise_pred_net = ConditionalUnet1D(input_dim=config['input_dims'], global_cond_dim=config["encoding_size"], down_dims=config["down_dims"], cond_predict_scale=config["cond_predict_scale"],)
+        dist_pred_network = DenseNetwork(embedding_dim=config["encoding_size"])
+        model = NoMaD(vision_encoder, noise_pred_net, dist_pred_network)
+        noise_scheduler = DDPMScheduler(num_train_timesteps=config["num_diffusion_iters"], beta_schedule='squaredcos_cap_v2', clip_sample=True, prediction_type='epsilon')
+        if rank == 0:
+            print(f"Number of trainable parameters in model: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
+            print(f"Number of trainable parameters in vision_encoder: {sum(p.numel() for p in vision_encoder.parameters() if p.requires_grad)}")
+            print(f"Number of trainable parameters in noise_pred_net: {sum(p.numel() for p in noise_pred_net.parameters() if p.requires_grad)}")
+            print(f"Number of trainable parameters in dist_pred_network: {sum(p.numel() for p in dist_pred_network.parameters() if p.requires_grad)}")
+    elif config['model_type'] == 'regression':
+        vision_encoder = get_vision_encoder()
+        model = RegressionModel(vision_encoder, output_dim=config["input_dims"]) # comes from the diffusion model params
 
     if config["clipping"]:
         print("Clipping gradients to", config["max_norm"])
@@ -309,17 +303,6 @@ def main(rank, world_size, config):
                 after_scheduler=scheduler,
             )
 
-    if rank == 0:
-        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Number of trainable parameters in model: {num_params}")
-        if config["model_type"] == "nomad":
-            num_vision_encoder_params = sum(p.numel() for p in vision_encoder.parameters() if p.requires_grad)
-            num_noise_pred_net_params = sum(p.numel() for p in noise_pred_net.parameters() if p.requires_grad)
-            num_dist_pred_net_params = sum(p.numel() for p in dist_pred_network.parameters() if p.requires_grad)
-            print(f"Number of trainable parameters in vision_encoder: {num_vision_encoder_params}")
-            print(f"Number of trainable parameters in noise_pred_net: {num_noise_pred_net_params}")
-            print(f"Number of trainable parameters in dist_pred_network: {num_dist_pred_net_params}")
-
     current_epoch = 0
     if "load_run" in config:
         load_project_folder = os.path.join("logs", config["load_run"])
@@ -342,29 +325,48 @@ def main(rank, world_size, config):
     # Set epoch for DistributedSampler
     train_sampler.set_epoch(current_epoch)
 
-    train_eval_loop_nomad(
-        train_model=config["train"],
-        model=model,
-        optimizer=optimizer,
-        lr_scheduler=scheduler,
-        noise_scheduler=noise_scheduler,
-        train_loader=train_loader,
-        test_dataloaders=test_dataloaders,
-        goal_mask_prob=config["goal_mask_prob"],
-        epochs=config["epochs"],
-        device=device,
-        project_folder=config["project_folder"],
-        print_log_freq=config["print_log_freq"],
-        wandb_log_freq=config["wandb_log_freq"],
-        image_log_freq=config["image_log_freq"],
-        num_images_log=config["num_images_log"],
-        current_epoch=current_epoch,
-        alpha=float(config["alpha"]),
-        use_wandb=config["use_wandb"],
-        eval_fraction=config["eval_fraction"],
-        eval_freq=config["eval_freq"],
-        rank=rank,
-    )
+    if config['model_type'] == 'nomad':
+        train_eval_loop_nomad(
+            train_model=config["train"],
+            model=model,
+            optimizer=optimizer,
+            lr_scheduler=scheduler,
+            noise_scheduler=noise_scheduler,
+            train_loader=train_loader,
+            test_dataloaders=test_dataloaders,
+            goal_mask_prob=config["goal_mask_prob"],
+            epochs=config["epochs"],
+            device=device,
+            project_folder=config["project_folder"],
+            print_log_freq=config["print_log_freq"],
+            wandb_log_freq=config["wandb_log_freq"],
+            image_log_freq=config["image_log_freq"],
+            num_images_log=config["num_images_log"],
+            current_epoch=current_epoch,
+            alpha=float(config["alpha"]),
+            use_wandb=config["use_wandb"],
+            eval_fraction=config["eval_fraction"],
+            eval_freq=config["eval_freq"],
+            rank=rank,
+        )
+    elif config['model_type'] == 'regression':
+        train_eval_loop_regression(
+            train_model=config["train"],
+            model=model,
+            optimizer=optimizer,
+            lr_scheduler=scheduler,
+            train_loader=train_loader,
+            test_dataloaders=test_dataloaders,
+            epochs=config["epochs"],
+            device=device,
+            project_folder=config["project_folder"],
+            print_log_freq=config["print_log_freq"],
+            wandb_log_freq=config["wandb_log_freq"],
+            current_epoch=current_epoch,
+            use_wandb=config["use_wandb"],
+            eval_fraction=config["eval_fraction"],
+            eval_freq=config["eval_freq"],
+        )
 
     if rank == 0:
         print("FINISHED TRAINING")

@@ -23,7 +23,7 @@ from vint_train.data.data_utils import (
     to_local_coords_3d
 )
 from vint_train.data.misc import XSensConstants
-from vint_train.training.nymeria_training_utils import get_delta_smpl, normalize_data_smpl_pose, normalize_data_smpl_pose_gaussian, set_gaussian_stats
+from vint_train.training.nymeria_training_utils import get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, normalize_data_smpl_pose_gaussian, set_gaussian_stats
 
 class ViNT_Nymeria_Dataset(Dataset):
     def __init__(
@@ -374,6 +374,10 @@ class ViNT_Nymeria_Dataset(Dataset):
         
         # load first pose for visualizations
         _, first_pose = self._compute_actions_nymeria_smpl_relpelvis(curr_traj_data, curr_time, curr_time, preserve_pose_up_down=self.preserve_pose_up_down)
+        
+        # compute goal pose incl initial pose, and xyz
+        gt_actions_with_initial = get_action_smpl_torch(first_pose[None], deltas_torch[None], XSensConstants.upper_body_num_parts)
+        
         if self.normalize:
             deltas_torch = self.normalize_data(deltas_torch, self.ACTION_STATS)
             # only deltas should be normalized as it is the output of the model.
@@ -395,9 +399,9 @@ class ViNT_Nymeria_Dataset(Dataset):
             context_poses.type(torch.float32),
             torch.as_tensor(distance, dtype=torch.int64),
             torch.as_tensor(goal_pos, dtype=torch.float32),
-            torch.as_tensor(self.dataset_index, dtype=torch.int64),
             torch.as_tensor(action_mask, dtype=torch.float32),
             torch.as_tensor(first_pose, dtype=torch.float32),
+            torch.as_tensor(gt_actions_with_initial[:, -1], dtype=torch.float32),
             obs_images.type(torch.float32),
             goal_image.type(torch.float32),
         )
