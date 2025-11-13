@@ -300,14 +300,6 @@ class ViNT_Nymeria_Dataset(Dataset):
         except TypeError:
             print(f"Failed to load image {image_path}")
     
-    def _get_trajectory(self, trajectory_name):
-        if trajectory_name in self.trajectory_cache:
-            return self.trajectory_cache[trajectory_name]
-        else:
-            with open(os.path.join(self.data_folder, trajectory_name, "traj_data.pkl"), "rb") as f:
-                traj_data = pickle.load(f)
-            self.trajectory_cache[trajectory_name] = traj_data
-            return traj_data
 
     def __len__(self) -> int:
         return len(self.index_to_data)
@@ -355,10 +347,6 @@ class ViNT_Nymeria_Dataset(Dataset):
         curr_traj_data = self._get_trajectory(f_curr)
         curr_traj_len = len(curr_traj_data[self.traj_len_key])
         assert curr_time < curr_traj_len, f"{curr_time} and {curr_traj_len}"
-
-        goal_traj_data = self._get_trajectory(f_goal)
-        goal_traj_len = len(goal_traj_data[self.traj_len_key])
-        assert goal_time < goal_traj_len, f"{goal_time} an {goal_traj_len}"
 
         # Compute actions
         actions, goal_pos = self._compute_actions_nymeria_smpl(curr_traj_data, curr_time, goal_time)
@@ -416,6 +404,8 @@ class ViNT_Nymeria_Dataset(Dataset):
 
     def _get_trajectory(self, trajectory_name):
         traj_data = torch.load(os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'), weights_only=False)
+        del traj_data['xsens_xyz']
+        del traj_data['xsens_eulerxyz']
         for k, v in traj_data.items():
             traj_data[k] = v.to(torch.float32)
         return traj_data

@@ -192,7 +192,7 @@ def main(rank, world_size, config):
             dataset,
             batch_size=config["eval_batch_size"],
             sampler=sampler,  # Use DistributedSampler instead of shuffle
-            num_workers=config['num_workers'],
+            num_workers=max(1, config['num_workers']//2), # half the number of workers to reduce memory usage
             drop_last=False,
             persistent_workers=False
         )
