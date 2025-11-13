@@ -15,11 +15,11 @@ sbatch <<EOF
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --tasks-per-node=1
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=$((16 * NUM_GPUS))
 #SBATCH --gres=gpu:${NUM_GPUS}
 #SBATCH --constraint=l40s
 #SBATCH --time=36:00:00
-#SBATCH --mem=200GB
+#SBATCH --mem=$((100 * NUM_GPUS))GB
 #SBATCH --job-name=nomad
 #SBATCH --output=/home/anw2067/slurm_logs/nomad-%j.out
 #SBATCH --error=/home/anw2067/slurm_logs/nomad-%j.err
