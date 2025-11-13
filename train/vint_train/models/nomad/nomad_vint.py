@@ -195,8 +195,7 @@ class NoMaD_ViNT(nn.Module):
             encoded_context_pose = self.proprioception_encoder(context_poses) # B, C+1, self.obs_encoding_size
         
         # Get the input goal mask 
-        if input_goal_mask is not None:
-            goal_mask = input_goal_mask.to(device)
+        goal_mask = input_goal_mask if input_goal_mask is not None else None
 
         # Get the goal encoding
         obsgoal_img = torch.cat([obs_img[:, self.context_size], goal_img], dim=1) if self.encoder_type == "efficientnet" else goal_img
@@ -240,8 +239,11 @@ class NoMaD_ViNT(nn.Module):
             obs_encoding_tokens = torch.mean(obs_encoding_tokens, dim=1)
         else:
             curr_goal_tokens = obs_encoding_tokens[:, -2*L:] # B, 2*L, D where the 2*L tokens are the current and goal tokens
-            avg_mask = (~src_key_padding_mask[:, -2*L:, None]).float()
-            obs_encoding_tokens = (curr_goal_tokens * avg_mask).sum(dim=1) / avg_mask.sum(dim=1)
+            if src_key_padding_mask is not None:
+                avg_mask = (~src_key_padding_mask[:, -2*L:, None]).float()
+                obs_encoding_tokens = (curr_goal_tokens * avg_mask).sum(dim=1) / avg_mask.sum(dim=1)
+            else:
+                obs_encoding_tokens = torch.mean(curr_goal_tokens, dim=1)
             
         return obs_encoding_tokens
 
