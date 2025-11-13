@@ -25,8 +25,8 @@ IMPORT YOUR MODEL HERE
 from vint_train.models.regression.regression_model import RegressionModel
 from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
-from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
-
+# from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
+from vint_train.models.nomad.conditional_uned1dnomad import ConditionalUnet1D_NoMaD
 from vint_train.data.vint_dataset import ViNT_Nymeria_Dataset
 from vint_train.training.train_eval_loop import (
     train_eval_loop_nomad,
@@ -221,7 +221,11 @@ def main(rank, world_size, config):
     # Create the model
     if config['model_type'] == 'nomad':
         vision_encoder = get_vision_encoder()
-        noise_pred_net = ConditionalUnet1D(input_dim=config['input_dims'], global_cond_dim=config["encoding_size"], down_dims=config["down_dims"], cond_predict_scale=config["cond_predict_scale"],)
+        noise_pred_net = ConditionalUnet1D_NoMaD(input_dim=config['input_dims'],
+                                                 global_cond_dim=config["encoding_size"],
+                                                 down_dims=config["down_dims"],
+                                                 cond_predict_scale=config["cond_predict_scale"],
+                                                 goal_pose_dims=48 if config.get("cheat_model", False) else 0)
         dist_pred_network = DenseNetwork(embedding_dim=config["encoding_size"])
         model = NoMaD(vision_encoder, noise_pred_net, dist_pred_network)
         noise_scheduler = DDPMScheduler(num_train_timesteps=config["num_diffusion_iters"], beta_schedule='squaredcos_cap_v2', clip_sample=True, prediction_type='epsilon')

@@ -195,11 +195,12 @@ def train_nomad(
         context_poses = context_poses.to(device, non_blocking=True)
         distance = distance.float().to(device, non_blocking=True)
         naction = deltas.to(device, non_blocking=True).float()
+        gt_actions_with_initial = gt_actions_with_initial.to(device, non_blocking=True)[:, 0]
 
         B = deltas.shape[0]
 
         # Generate random goal mask
-        goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
+        goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device) # 1 if goal mask, 0 if no mask
         obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses)
         # Predict distance
         dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
@@ -221,7 +222,7 @@ def train_nomad(
             naction, noise, timesteps)
         
         # Predict the noise residual
-        noise_pred = model("noise_pred_net", sample=noisy_action, timestep=timesteps, global_cond=obsgoal_cond)
+        noise_pred = model("noise_pred_net", sample=noisy_action, timestep=timesteps, global_cond=obsgoal_cond, goal_pose=gt_actions_with_initial * (1 - goal_mask[:, None]))
 
         def action_reduce(unreduced_loss: torch.Tensor):
             # Reduce over non-batch dimensions to get loss per batch element
@@ -245,11 +246,14 @@ def train_nomad(
         # Update Exponential Moving Average of the model weights
         ema_model.step(model)
         
+        if isinstance(tepoch, tqdm.tqdm):   
+            tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
+        
         # In-step evaluations
         if i % print_log_freq == 0 or (image_log_freq != 0 and i % image_log_freq == 0):
             model_output_dict = model_output(
                 ema_model.averaged_model, noise_scheduler,
-                batch_obs_images, batch_goal_images, context_poses,
+                batch_obs_images, batch_goal_images, gt_actions_with_initial, context_poses,
                 pred_horizon=deltas.shape[1], action_dim=deltas.shape[2],
                 num_samples=1,device=device,
             )
@@ -331,9 +335,6 @@ def train_nomad(
                 "diffusion_loss": reduced_diffusion_loss,
                 "lr": optimizer.param_groups[0]["lr"]
             })
-            
-        if isinstance(tepoch, tqdm.tqdm):   
-            tepoch.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
                         
         if use_wandb and (i % wandb_log_freq == 0 or i % image_log_freq == 0 or i % print_log_freq == 0) and rank == 0:
             wandb.log({}, commit=True)  # Commit the batch log to wandb
@@ -421,6 +422,7 @@ def evaluate_nomad(
         context_poses = context_poses.to(device, non_blocking=True)
         batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
         batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+        gt_actions_with_initial = gt_actions_with_initial.to(device, non_blocking=True)[:, 0]
 
         action_mask = action_mask.to(device)
 
@@ -455,21 +457,21 @@ def evaluate_nomad(
 
         ### RANDOM MASK ERROR ###
         # Predict the noise residual
-        rand_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=rand_mask_cond)
+        rand_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=rand_mask_cond, goal_pose=gt_actions_with_initial * (1 - rand_goal_mask[:, None]))
         
         # L2 loss
         rand_mask_loss = nn.functional.mse_loss(rand_mask_noise_pred, noise)
         
         ### NO MASK ERROR ###
         # Predict the noise residual
-        no_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=obsgoal_cond)
+        no_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=obsgoal_cond, goal_pose=gt_actions_with_initial * (1 - no_mask[:, None]))
         
         # L2 loss
         no_mask_loss = nn.functional.mse_loss(no_mask_noise_pred, noise)
 
         ### GOAL MASK ERROR ###
         # predict the noise residual
-        goal_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=goal_mask_cond)
+        goal_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=goal_mask_cond, goal_pose=gt_actions_with_initial * (1 - goal_mask[:, None]))
         
         # L2 loss
         goal_mask_loss = nn.functional.mse_loss(goal_mask_noise_pred, noise)
@@ -499,6 +501,7 @@ def evaluate_nomad(
             noise_scheduler,
             batch_obs_images,
             batch_goal_images,
+            gt_actions_with_initial,
             context_poses,
             pred_horizon=deltas.shape[1],
             action_dim=deltas.shape[2],
@@ -593,6 +596,7 @@ def model_output(
     noise_scheduler: DDPMScheduler,
     batch_obs_images: torch.Tensor,
     batch_goal_images: torch.Tensor,
+    gt_actions_with_initial: torch.Tensor,
     context_poses: torch.Tensor,
     pred_horizon: int,
     action_dim: int,
@@ -629,7 +633,8 @@ def model_output(
             "noise_pred_net",
             sample=diffusion_output,
             timestep=k.unsqueeze(-1).repeat(diffusion_output.shape[0]).to(device),
-            global_cond=obs_cond
+            global_cond=obs_cond,
+            goal_pose=gt_actions_with_initial * (1 - goal_mask[:, None])
         )
 
         # inverse diffusion step (remove noise)
@@ -652,7 +657,8 @@ def model_output(
             "noise_pred_net",
             sample=diffusion_output,
             timestep=k.unsqueeze(-1).repeat(diffusion_output.shape[0]).to(device),
-            global_cond=obsgoal_cond
+            global_cond=obsgoal_cond,
+            goal_pose=gt_actions_with_initial * (1 - goal_mask[:, None])
         )
 
         # inverse diffusion step (remove noise)
