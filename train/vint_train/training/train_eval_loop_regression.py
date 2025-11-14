@@ -16,7 +16,7 @@ from torch.optim import Adam
 from torchvision import transforms
 
 from vint_train.data.misc import XSensConstants, XsensSkeleton
-from vint_train.training.nymeria_training_utils import forward_kinematics_wrapper, get_action_smpl_torch
+from vint_train.training.nymeria_training_utils import forward_kinematics_wrapper, get_action_smpl_torch, unnormalize_data_smpl_pose_gaussian
 from vint_train.training.train_utils import reduce_metrics
 
 def train_eval_loop_regression(
@@ -164,6 +164,7 @@ def train_regression(
         batch_goal_images = batch_goal_images.to(device, non_blocking=True)
         context_poses = context_poses.to(device, non_blocking=True)
         gt_action = gt_actions_with_initial.to(device, non_blocking=True)[:, 0]
+        first_pose = first_pose.to(device, non_blocking=True)[:, 0]
 
         pred_action = model(batch_obs_images, batch_goal_images, context_poses)
         loss = nn.functional.mse_loss(pred_action, gt_action)
@@ -180,10 +181,13 @@ def train_regression(
         if i % print_log_freq == 0:
             if rank == 0: print(f"Epoch {epoch}, Iter {i}, Loss {loss.item()}")
             metrics = compute_metrics(pred_action.detach(), gt_action.detach())
+            init_metrics = compute_metrics(first_pose.detach(), gt_action.detach())
             if torch.distributed.is_initialized():
                 metrics = reduce_metrics(metrics)
-            
+                init_metrics = reduce_metrics(init_metrics)
+                
             data_log = {} 
+            for key, value in init_metrics.items(): data_log[f"segments_init/{key}"] = value.item()
             for key, value in metrics.items():
                 if rank == 0: print("Metrics:", key, value.item())
                 if any(part in key for part in ["Pelvis", "Head", "Hand"]):
@@ -247,16 +251,19 @@ def evaluate_regression(
         pred_action = model(batch_obs_images, batch_goal_images, context_poses)
         loss = nn.functional.mse_loss(pred_action, gt_action)
         
+        init_metrics = compute_metrics(first_pose.detach(), gt_action.detach())
         metrics = compute_metrics(pred_action.detach(), gt_action.detach())
         if torch.distributed.is_initialized():
+            init_metrics = reduce_metrics(init_metrics)
             metrics = reduce_metrics(metrics)
             loss = reduce_metrics({"total_loss": loss})["total_loss"]
             
+        for key, value in init_metrics.items(): metric_accumulator[f"eval_segments_init/{key}"] += value.mean().item()
         for key, value in metrics.items():
             if any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                metric_accumulator[f"segments_leaf/{key}"] += value.mean().item()
+                metric_accumulator[f"eval_segments_leaf/{key}"] += value.mean().item()
             else:
-                metric_accumulator[f"segments/{key}"] += value.mean().item()
+                metric_accumulator[f"eval_segments/{key}"] += value.mean().item()
         metric_accumulator["total_loss"] += loss.mean().item()
     
     for key, value in metric_accumulator.items():
