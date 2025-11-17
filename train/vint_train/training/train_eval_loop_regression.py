@@ -102,9 +102,6 @@ def train_eval_loop_regression(
                     eval_fraction=eval_fraction,
                     use_wandb=use_wandb,
                 )
-        if use_wandb and rank == 0:
-            wandb.log({})
-    print()
 
 def compute_metrics(
     pred_action: torch.Tensor,
@@ -247,6 +244,7 @@ def evaluate_regression(
         batch_goal_images = batch_goal_images.to(device, non_blocking=True)
         context_poses = context_poses.to(device, non_blocking=True)
         gt_action = gt_actions_with_initial.to(device, non_blocking=True)[:, 0]
+        first_pose = first_pose.to(device, non_blocking=True)[:, 0]
 
         pred_action = model(batch_obs_images, batch_goal_images, context_poses)
         loss = nn.functional.mse_loss(pred_action, gt_action)
