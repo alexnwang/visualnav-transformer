@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 11/17/2025 trying to train a regression model with current pose as target
+./submit_scripts/submit_torch.sh config/torch/regression-proprioception-cat8-current_pose.yaml 4
+
 # 11/13/2025 trying to train a cheat model
 # ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-cheat.yaml 4
 

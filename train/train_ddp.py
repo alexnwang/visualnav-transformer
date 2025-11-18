@@ -363,6 +363,7 @@ def main(rank, world_size, config):
             test_dataloaders=test_dataloaders,
             epochs=config["epochs"],
             device=device,
+            target_type=config.get("target_type", "goal_pose"),
             project_folder=config["project_folder"],
             print_log_freq=config["print_log_freq"],
             wandb_log_freq=config["wandb_log_freq"],

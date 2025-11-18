@@ -29,6 +29,7 @@ def train_eval_loop_regression(
     epochs: int,
     device: torch.device,
     project_folder: str,
+    target_type: str = "goal_pose", # "goal_pose" or "current_pose"
     print_log_freq: int = 100,
     wandb_log_freq: int = 10,
     current_epoch: int = 0,
@@ -65,6 +66,7 @@ def train_eval_loop_regression(
             f"Start Regression Training Epoch {epoch}/{epochs - 1}"
             )
             train_regression(
+                target_type=target_type,
                 model=model,
                 optimizer=optimizer,
                 lr_scheduler=lr_scheduler,
@@ -96,6 +98,7 @@ def train_eval_loop_regression(
                 )
                 loader = test_dataloaders[dataset_type]
                 evaluate_regression(
+                    target_type=target_type,
                     model=model,
                     dataloader=loader,
                     device=device,
@@ -123,6 +126,7 @@ def compute_metrics(
     return res
 
 def train_regression(
+    target_type: str,
     model: nn.Module,
     optimizer: Adam,
     lr_scheduler: torch.optim.lr_scheduler,
@@ -162,9 +166,17 @@ def train_regression(
         context_poses = context_poses.to(device, non_blocking=True)
         gt_action = gt_actions_with_initial.to(device, non_blocking=True)[:, 0]
         first_pose = first_pose.to(device, non_blocking=True)[:, 0]
+        
+        if target_type == "goal_pose":
+            target = gt_action
+        elif target_type == "current_pose":
+            target = context_poses[:, -1]
+        else:
+            raise ValueError(f"Invalid target type: {target_type}")
 
         pred_action = model(batch_obs_images, batch_goal_images, context_poses)
-        loss = nn.functional.mse_loss(pred_action, gt_action)
+        # loss = nn.functional.mse_loss(pred_action, gt_action)
+        loss = nn.functional.mse_loss(pred_action, target)
         
         # Optimize
         optimizer.zero_grad()
@@ -177,8 +189,8 @@ def train_regression(
             
         if i % print_log_freq == 0:
             if rank == 0: print(f"Epoch {epoch}, Iter {i}, Loss {loss.item()}")
-            metrics = compute_metrics(pred_action.detach(), gt_action.detach())
-            init_metrics = compute_metrics(first_pose.detach(), gt_action.detach())
+            metrics = compute_metrics(pred_action.detach(), target.detach())
+            init_metrics = compute_metrics(first_pose.detach(), target.detach())
             if torch.distributed.is_initialized():
                 metrics = reduce_metrics(metrics)
                 init_metrics = reduce_metrics(init_metrics)
@@ -202,6 +214,7 @@ def train_regression(
 
         
 def evaluate_regression(
+    target_type: str,
     model: nn.Module,
     dataloader: DataLoader,
     device: torch.device,
@@ -247,10 +260,16 @@ def evaluate_regression(
         first_pose = first_pose.to(device, non_blocking=True)[:, 0]
 
         pred_action = model(batch_obs_images, batch_goal_images, context_poses)
-        loss = nn.functional.mse_loss(pred_action, gt_action)
+        if target_type == "goal_pose":
+            target = gt_action
+        elif target_type == "current_pose":
+            target = context_poses[:, -1]
+        else:
+            raise ValueError(f"Invalid target type: {target_type}")
+        loss = nn.functional.mse_loss(pred_action, target)
         
-        init_metrics = compute_metrics(first_pose.detach(), gt_action.detach())
-        metrics = compute_metrics(pred_action.detach(), gt_action.detach())
+        init_metrics = compute_metrics(first_pose.detach(), target.detach())
+        metrics = compute_metrics(pred_action.detach(), target.detach())
         if torch.distributed.is_initialized():
             init_metrics = reduce_metrics(init_metrics)
             metrics = reduce_metrics(metrics)
