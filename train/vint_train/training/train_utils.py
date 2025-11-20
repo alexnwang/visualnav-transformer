@@ -57,10 +57,8 @@ def _compute_3d_joint_metrics(
     gt_actions = get_action_smpl_torch(first_pose, batch_deltas_gt, XSensConstants.upper_body_num_parts) # B, T, 48
     
     def _compute_pose_and_loss(actn, gt_actn, skel, actn_mask=None):
-        gt_xyz = forward_kinematics_wrapper(gt_actn, skel, XSensConstants.upper_body_num_parts) # B, num_segments, 3
-        gt_rpy = gt_actn[:, 3:].reshape(-1, XSensConstants.upper_body_num_parts, 3) # B, num_segments, 3
-        pred_xyz = forward_kinematics_wrapper(actn, skel, XSensConstants.upper_body_num_parts) # B, num_segments, 3
-        pred_rpy = actn[:, 3:].reshape(-1, XSensConstants.upper_body_num_parts, 3) # B, num_segments, 3
+        gt_xyz, gt_rpy = forward_kinematics_wrapper(gt_actn, skel, XSensConstants.upper_body_num_parts, return_euler=True) # B, num_segments, 3
+        pred_xyz, pred_rpy = forward_kinematics_wrapper(actn, skel, XSensConstants.upper_body_num_parts, return_euler=True) # B, num_segments, 3
         res = {}
         for i, body_part_name in enumerate(XSensConstants.part_names[:XSensConstants.upper_body_num_parts]):
             R_gt = R.from_euler('xyz', gt_rpy[:, i, :].detach().cpu().numpy(), degrees=False)

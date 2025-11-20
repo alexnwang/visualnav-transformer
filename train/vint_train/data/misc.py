@@ -23,26 +23,35 @@ class Skeleton:
                 dtype=torch.float32).repeat(orientations.shape[0], 1, 1).unsqueeze(1).to(device)             
             orientations = G.transpose(2, 3).matmul(orientations).matmul(G)
                 
+        # positions (num_segments, N, 3)
         positions = torch.zeros([len(self.offsets), orientations.shape[0], 3], dtype=torch.float32).to(device)
         positions[0] = root_pos
+        if not to_smpl and not to_mvnx:
+            abs_orientations = torch.zeros_like(orientations) # N, num_segments, 3, 3
+            abs_orientations[:, 0] = orientations[:, 0]
         
         topology = self.topology[:orientations.shape[1]]
         for i, parent_indices in enumerate(topology):
             if parent_indices == -1:
                 continue
             else:            
-                x_B = self.offsets[i].to(device)
-                x_B = x_B.view(1, -1, 1).repeat(orientations.shape[0], 1, 1)
+                x_B = self.offsets[i].to(device) # (3,)the offset for this bone
+                x_B = x_B.view(1, -1, 1).repeat(orientations.shape[0], 1, 1) # (N, 3, 1) so that it can be broadcasted to (N, 3, 3)
 
-                R_GB = orientations[:, parent_indices]
+                R_GB = orientations[:, parent_indices] # N, 3, 3
+                
+                # start from the parent's position, and apply the rotation to the bone to get the bone position
                 positions[i] = (positions[parent_indices].to(device) + R_GB.bmm(x_B).squeeze(2))
-
+                if not to_smpl and not to_mvnx:
+                    abs_orientations[:, i] = torch.bmm(abs_orientations[:, parent_indices], R_GB)
         if to_smpl:
             R = torch.tensor([[0, 1, 0], [0, 0, 1], [1, 0, 0]], dtype=torch.float32).to(device)
             positions = R.matmul(positions.permute(1, 2, 0).contiguous()).transpose(1, 2)
             return positions
         else:
-            return positions.permute(1, 0, 2)
+            if not to_mvnx:
+                return positions.permute(1, 0, 2), abs_orientations
+            return positions.permute(1, 0, 2) # (N, num_segments, 3)
             
             
 class XsensSkeleton(Skeleton):

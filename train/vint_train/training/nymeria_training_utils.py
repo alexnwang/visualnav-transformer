@@ -235,7 +235,14 @@ def euler_to_rotmat(euler):
     rotmat = torch.from_numpy(rotmat).float()
     return rotmat
 
-def forward_kinematics_wrapper(abs_smpl_pose: torch.Tensor, xsens_skel: XsensSkeleton, num_segments: int = 15) -> torch.Tensor:
+def rotmat_to_euler(rotmat):
+    # Assume (N, 3, 3) -> (N, 3)
+    euler = R.from_matrix(rotmat).as_euler('xyz', degrees=False)
+    euler = torch.from_numpy(euler).float()
+    return euler
+
+def forward_kinematics_wrapper(abs_smpl_pose: torch.Tensor, xsens_skel: XsensSkeleton, num_segments: int = 15,
+                               return_euler: bool=False) -> torch.Tensor:
     """
     Converts pelvis xyz + 15*(rpy) poses into joint xyz values.
     
@@ -243,6 +250,7 @@ def forward_kinematics_wrapper(abs_smpl_pose: torch.Tensor, xsens_skel: XsensSke
     abs_smpl_pose (torch.Tensor): (B, 48) or (B, T, 48)
     xsens_skel (XsensSkeleton): XSens skeleton for forward kinematics
     num_segments (int): number of segments to use
+    return_euler (bool): whether to return the euler angles instead of the rotation matrices
     
     Returns:
     body_translation (torch.Tensor): (B, num_segments, 3) or (B, T, num_segments, 3)
@@ -256,21 +264,27 @@ def forward_kinematics_wrapper(abs_smpl_pose: torch.Tensor, xsens_skel: XsensSke
     else:
         B = N = abs_smpl_pose.shape[0]
         T = None
+    # abs_smpl_pose: (N, 48)
         
     root_xyz = abs_smpl_pose[:, :3]
 
-    smpl_pose_euler = abs_smpl_pose[:, 3:].unflatten(1, (num_segments, 3))
+    smpl_pose_euler = abs_smpl_pose[:, 3:].unflatten(1, (num_segments, 3)) # N, num_segments=15, 3
     smpl_pose_rotmat = euler_to_rotmat(smpl_pose_euler.flatten(0, 1))
-    smpl_pose_rotmat = smpl_pose_rotmat.unflatten(0, (N, num_segments))
+    smpl_pose_rotmat = smpl_pose_rotmat.unflatten(0, (N, num_segments)) # N, num_segments, 3, 3
 
-    body_translation = xsens_skel.forward_kinematics(root_xyz, smpl_pose_rotmat, to_smpl=False, to_mvnx=False)
+    body_translation, body_orientations = xsens_skel.forward_kinematics(root_xyz, smpl_pose_rotmat, to_smpl=False, to_mvnx=False)
     body_translation = body_translation[:, :num_segments]
-    
-    if T is not None:
+    if T is not None: 
         body_translation = body_translation.unflatten(0, (B, T))
-
     body_translation = body_translation.to(device)
-    return body_translation
+    if return_euler:
+        body_rpy = rotmat_to_euler(body_orientations.flatten(0, 1)).unflatten(0, (N, num_segments)) # N, 3
+        if T is not None:
+            body_rpy = body_rpy.unflatten(0, (B, T))
+        body_rpy = body_rpy.to(device)
+        return body_translation, body_rpy
+    else:
+        return body_translation
 
 def plot_images_and_actions_full_body(image_plot_dir, # save location
                                       name, # trajectory id, like index

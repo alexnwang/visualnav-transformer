@@ -111,10 +111,8 @@ def compute_metrics(
     gt_action: torch.Tensor,
 ):
     skeleton = XsensSkeleton()
-    pred_xyz = forward_kinematics_wrapper(pred_action, skeleton, XSensConstants.upper_body_num_parts)
-    gt_xyz = forward_kinematics_wrapper(gt_action, skeleton, XSensConstants.upper_body_num_parts)
-    pred_rpy = pred_action[:, 3:].reshape(-1, XSensConstants.upper_body_num_parts, 3)
-    gt_rpy = gt_action[:, 3:].reshape(-1, XSensConstants.upper_body_num_parts, 3)
+    pred_xyz, pred_rpy = forward_kinematics_wrapper(pred_action, skeleton, XSensConstants.upper_body_num_parts, return_euler=True)
+    gt_xyz, gt_rpy = forward_kinematics_wrapper(gt_action, skeleton, XSensConstants.upper_body_num_parts, return_euler=True)
     res = {}
     for i, body_part_name in enumerate(XSensConstants.part_names[:XSensConstants.upper_body_num_parts]):
         R_gt = R.from_euler('xyz', gt_rpy[:, i, :].detach().cpu().numpy(), degrees=False)
@@ -213,6 +211,7 @@ def train_regression(
             }, commit=True)  # Commit the batch log to wandb
 
         
+@torch.no_grad()
 def evaluate_regression(
     target_type: str,
     model: nn.Module,
