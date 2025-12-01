@@ -195,7 +195,8 @@ def train_nomad(
         context_poses = context_poses.to(device, non_blocking=True)
         distance = distance.float().to(device, non_blocking=True)
         naction = deltas.to(device, non_blocking=True).float()
-        gt_actions_with_initial = gt_actions_with_initial.to(device, non_blocking=True)[:, 0]
+        # gt_actions_with_initial = gt_actions_with_initial.to(device, non_blocking=True)[:, 0]
+        gt_actions_with_initial = goal_pos.to(device, non_blocking=True)[:, 0]
 
         B = deltas.shape[0]
 
