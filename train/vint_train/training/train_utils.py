@@ -1,3 +1,4 @@
+import argparse
 from vint_train.data.misc import XsensSkeleton, XSensConstants
 from vint_train.training.nymeria_training_utils import forward_kinematics_wrapper, get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, plot_images_and_actions_full_body, unnormalize_data_smpl_pose, unnormalize_data_smpl_pose_gaussian
 import wandb
@@ -128,6 +129,7 @@ def reduce_metrics(mdict):
     return mdict
 
 def train_nomad(
+    args: argparse.Namespace,
     model: nn.Module,
     ema_model: EMAModel,
     optimizer: Adam,
@@ -150,6 +152,7 @@ def train_nomad(
     Train the model for one epoch.
 
     Args:
+        args: argparse.Namespace
         model: model to train
         ema_model: exponential moving average model
         optimizer: optimizer to use
@@ -344,6 +347,7 @@ def train_nomad(
 
 @torch.no_grad()
 def evaluate_nomad(
+    args: argparse.Namespace,
     eval_type: str,
     ema_model: EMAModel,
     dataloader: DataLoader,
@@ -364,6 +368,7 @@ def evaluate_nomad(
     Evaluate the model on the given evaluation dataset.
 
     Args:
+        args: argparse.Namespace
         eval_type (string): f"{data_type}_{eval_type}" (e.g. "recon_train", "gs_test", etc.)
         ema_model (nn.Module): exponential moving average version of model to evaluate
         dataloader (DataLoader): dataloader for eval

@@ -331,6 +331,7 @@ def main(rank, world_size, config):
 
     if config['model_type'] == 'nomad':
         train_eval_loop_nomad(
+            args=args,
             train_model=config["train"],
             model=model,
             optimizer=optimizer,
