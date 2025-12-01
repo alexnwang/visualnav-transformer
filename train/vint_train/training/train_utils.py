@@ -74,10 +74,12 @@ def _compute_3d_joint_metrics(
     
     uc_3d_joint_metrics_dict = _compute_pose_and_loss(uc_actions[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
     gc_3d_joint_metrics_dict = _compute_pose_and_loss(gc_actions[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
+    init_3d_joint_metrics_dict = _compute_pose_and_loss(first_pose[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
     
     return {
         **{f"uc_{key}": value for key, value in uc_3d_joint_metrics_dict.items()},
         **{f"gc_{key}": value for key, value in gc_3d_joint_metrics_dict.items()},
+        **{f"init_{key}": value for key, value in init_3d_joint_metrics_dict.items()},
     }
 
 
@@ -279,7 +281,9 @@ def train_nomad(
                 data_log['uc_leaf_xyz'], data_log['uc_leaf_angular_distance'] = 0, 0
                 data_log['gc_leaf_xyz'], data_log['gc_leaf_angular_distance'] = 0, 0
                 for key, value in _3dp_metrics.items():
-                    if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+                    if "init" in key:
+                        data_log[f"segments_init/{key}"] = value.item()
+                    elif any(part in key for part in ["Pelvis", "Head", "Hand"]):
                         data_log[f"segments_leaf/{key}"] = value.item()
                         if "uc" in key: 
                             if "xyz" in key: data_log['uc_leaf_xyz'] += value.item() / 4.
@@ -535,7 +539,9 @@ def evaluate_nomad(
         data_log["eval/uc_leaf_xyz"], data_log['eval/uc_leaf_angular_distance'] = 0, 0
         data_log["eval/gc_leaf_xyz"], data_log['eval/gc_leaf_angular_distance'] = 0, 0
         for key, value in _3dp_metrics.items():
-            if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+            if "init" in key:
+                data_log[f"eval_segments_init/{key}"] = value.item()
+            elif any(part in key for part in ["Pelvis", "Head", "Hand"]):
                 data_log[f"eval_segments_leaf/{key}"] = value.item()
                 if "uc" in key: 
                     if "xyz" in key: data_log['eval/uc_leaf_xyz'] += value.item() / 4.
