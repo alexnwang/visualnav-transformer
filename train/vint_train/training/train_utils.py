@@ -662,7 +662,7 @@ def model_output(
             sample=diffusion_output,
             timestep=k.unsqueeze(-1).repeat(diffusion_output.shape[0]).to(device),
             global_cond=obsgoal_cond,
-            goal_pose=gt_actions_with_initial * (1 - goal_mask[:, None])
+            goal_pose=gt_actions_with_initial * (1-no_mask[:, None])
         )
 
         # inverse diffusion step (remove noise)
