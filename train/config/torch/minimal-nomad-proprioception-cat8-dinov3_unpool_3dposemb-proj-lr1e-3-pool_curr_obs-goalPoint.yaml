@@ -1,5 +1,5 @@
 project_name: nomad-minimal
-run_name: nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-cheat
+run_name: nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-goalPoint
 
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
@@ -8,7 +8,7 @@ batch_size: 64
 epochs: 10
 gpu_ids: [0]
 num_workers: 16
-lr: 5e-4
+lr: 1e-3
 optimizer: adamw
 clipping: False
 max_norm: 1.
@@ -22,7 +22,7 @@ seed: 0
 
 # model params
 model_type: nomad
-goal_type: cheat
+goal_type: point
 proprioception: True
 encoding_size: 384
 pool_features: False

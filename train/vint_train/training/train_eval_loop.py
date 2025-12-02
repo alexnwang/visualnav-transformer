@@ -19,7 +19,7 @@ from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.training_utils import EMAModel
 
 def train_eval_loop_nomad(
-    args: argparse.Namespace,
+    config: dict,
     train_model: bool,
     model: nn.Module,
     optimizer: Adam, 
@@ -46,7 +46,7 @@ def train_eval_loop_nomad(
     Train and evaluate the model for several epochs (vint or gnm models)
 
     Args:
-        args: argparse.Namespace
+        config: dict
         model: model to train
         optimizer: optimizer to use
         lr_scheduler: learning rate scheduler to use
@@ -76,7 +76,7 @@ def train_eval_loop_nomad(
             f"Start ViNT DP Training Epoch {epoch}/{epochs - 1}"
             )
             train_nomad(
-                args=args,
+                config=config,
                 model=model,
                 ema_model=ema_model,
                 optimizer=optimizer,
@@ -127,7 +127,7 @@ def train_eval_loop_nomad(
                 )
                 loader = test_dataloaders[dataset_type]
                 evaluate_nomad(
-                    args=args,
+                    config=config,
                     eval_type=dataset_type,
                     ema_model=ema_model,
                     dataloader=loader,

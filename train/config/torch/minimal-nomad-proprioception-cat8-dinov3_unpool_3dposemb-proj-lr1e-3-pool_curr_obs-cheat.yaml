@@ -22,13 +22,13 @@ seed: 0
 
 # model params
 model_type: nomad
+goal_type: cheat
 proprioception: True
 encoding_size: 384
 pool_features: False
 project_encoding: True
 pos_enc_3d: True
 pool_curr_obs: True
-cheat_model: True
 # vision enc
 vision_encoder: nomad_vint
 obs_encoder: dinov3-s

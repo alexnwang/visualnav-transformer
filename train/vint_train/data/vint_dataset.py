@@ -22,8 +22,8 @@ from vint_train.data.data_utils import (
     to_local_coords,
     to_local_coords_3d
 )
-from vint_train.data.misc import XSensConstants
-from vint_train.training.nymeria_training_utils import get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, normalize_data_smpl_pose_gaussian, set_gaussian_stats
+from vint_train.data.misc import XSensConstants, XsensSkeleton
+from vint_train.training.nymeria_training_utils import forward_kinematics_wrapper, get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, normalize_data_smpl_pose_gaussian, set_gaussian_stats
 
 class ViNT_Nymeria_Dataset(Dataset):
     def __init__(
@@ -42,6 +42,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         negative_goals: bool,
         len_traj_pred: int,
         context_size: int,
+        return_xyz: bool = False,
         preserve_pose_up_down: bool = False,
         context_type: str = "temporal",
         end_slack: int = 0,
@@ -81,6 +82,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         self.dataset_name = dataset_name
         
         self.traj_len_key = "all_parts"
+        self.return_xyz = return_xyz
         
         traj_names_file = os.path.join(data_split_folder, "traj_names.txt")
         with open(traj_names_file, "r") as f:
@@ -370,13 +372,13 @@ class ViNT_Nymeria_Dataset(Dataset):
         deltas_torch = get_delta_smpl(actions_torch, num_segments=self.num_segments)
         
         # normalize goals as well
-        goal_pos = torch.as_tensor(goal_pos, dtype=torch.float32)
+        goal_pos = torch.as_tensor(goal_pos, dtype=torch.float32) # 1, 48
         
         # load first pose for visualizations
         _, first_pose = self._compute_actions_nymeria_smpl_relpelvis(curr_traj_data, curr_time, curr_time, preserve_pose_up_down=self.preserve_pose_up_down)
         
         # compute goal pose incl initial pose, and xyz
-        gt_actions_with_initial = get_action_smpl_torch(first_pose[None], deltas_torch[None], XSensConstants.upper_body_num_parts)
+        gt_actions_with_initial = get_action_smpl_torch(first_pose[None], deltas_torch[None], XSensConstants.upper_body_num_parts)[:, -1] # 1, 48
         
         if self.normalize:
             deltas_torch = self.normalize_data(deltas_torch, self.ACTION_STATS)
@@ -392,7 +394,7 @@ class ViNT_Nymeria_Dataset(Dataset):
             (not goal_is_negative)
         )
 
-        return {
+        ret_dict = {
             "obs_image_transformed": obs_image_transformed.type(torch.float32),
             "goal_image_transformed": goal_image_transformed.type(torch.float32),
             "deltas": deltas_torch.type(torch.float32),
@@ -401,10 +403,23 @@ class ViNT_Nymeria_Dataset(Dataset):
             "goal_pos": torch.as_tensor(goal_pos, dtype=torch.float32),
             "action_mask": torch.as_tensor(action_mask, dtype=torch.float32),
             "first_pose": torch.as_tensor(first_pose, dtype=torch.float32),
-            "gt_actions_with_initial": torch.as_tensor(gt_actions_with_initial[:, -1], dtype=torch.float32),
+            "gt_actions_with_initial": torch.as_tensor(gt_actions_with_initial, dtype=torch.float32),
             "obs_images": obs_images.type(torch.float32),
             "goal_image": goal_image.type(torch.float32),
         }
+        if self.return_xyz:
+            if "xsens_offsets" in curr_traj_data:
+                raise NotImplementedError("xsens_offsets not supported for point conditioning yet, need to implement metric computations in train_utils.py")
+                xsens_offsets = curr_traj_data["xsens_offsets"]
+                xsens_skel = XsensSkeleton(offsets=curr_traj_data["xsens_offsets"])
+            else:
+                xsens_skel = XsensSkeleton()
+                xsens_offsets = xsens_skel.offsets
+            goal_xyz = forward_kinematics_wrapper(gt_actions_with_initial, xsens_skel, return_euler=False) # 1, 15, 3
+            ret_dict["goal_pose_xyz"] = torch.as_tensor(goal_xyz, dtype=torch.float32)
+            ret_dict['xsens_offsets'] = torch.as_tensor(xsens_offsets, dtype=torch.float32)
+        return ret_dict
+        
         # return (
         #     obs_image_transformed.type(torch.float32),
         #     goal_image_transformed.type(torch.float32),

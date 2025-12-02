@@ -148,6 +148,7 @@ def main(rank, world_size, config):
                     normalize=config["normalize"],
                     goal_type=config["goal_type"],
                     gaussian_normalization_stats_path=data_config["gaussian_normalization_stats_path"],
+                    return_xyz=True if config["goal_type"] == "point" else False,
                 )
                 
                 if data_config.get("repeat", 1) > 1:
@@ -221,11 +222,18 @@ def main(rank, world_size, config):
     # Create the model
     if config['model_type'] == 'nomad':
         vision_encoder = get_vision_encoder()
+        
+        if config.get("goal_type", None) == "cheat":
+            goal_pose_dim = 48
+        elif config.get("goal_type", None) == "point":
+            goal_pose_dim = 4 * 3 # 3 dimensions each for (Head, LHand, RHand, Pelvis)
+        else:
+            goal_pose_dim = 0
         noise_pred_net = ConditionalUnet1D_NoMaD(input_dim=config['input_dims'],
                                                  global_cond_dim=config["encoding_size"],
                                                  down_dims=config["down_dims"],
                                                  cond_predict_scale=config["cond_predict_scale"],
-                                                 goal_pose_dims=48 if config.get("cheat_model", False) else 0)
+                                                 goal_pose_dims=goal_pose_dim)
         dist_pred_network = DenseNetwork(embedding_dim=config["encoding_size"])
         model = NoMaD(vision_encoder, noise_pred_net, dist_pred_network)
         noise_scheduler = DDPMScheduler(num_train_timesteps=config["num_diffusion_iters"], beta_schedule='squaredcos_cap_v2', clip_sample=True, prediction_type='epsilon')
@@ -331,7 +339,7 @@ def main(rank, world_size, config):
 
     if config['model_type'] == 'nomad':
         train_eval_loop_nomad(
-            args=args,
+            config=config,
             train_model=config["train"],
             model=model,
             optimizer=optimizer,
