@@ -1,4 +1,14 @@
 #!/bin/bash
+# 12/01/2025 cheat model post fix (cdafef8f5383278548a0dede70c06c7ff585689c)
+# ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-cheat.yaml 4 # lower lr because the 1e-3 is fluctuating
+# ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-cheat.yaml 4
+# ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs.yaml 4 # fixed the angular distance metrics
+
+# 11/20/2025 running the regression model again, but with fixed angular distance metrics
+# ./submit_scripts/submit_torch.sh config/torch/regression-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs.yaml 4
+# ./submit_scripts/submit_torch.sh config/torch/regression-proprioception-cat4-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs.yaml 4
+# ./submit_scripts/submit_torch.sh config/torch/regression-proprioception-cat2-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs.yaml 4
+
 
 # 11/17/2025 trying to train a regression model with current pose as target
 # ./submit_scripts/submit_torch.sh config/torch/regression-proprioception-cat8-current_pose.yaml 4
