@@ -49,7 +49,6 @@ class ViNT_Nymeria_Dataset(Dataset):
         goals_per_obs: int = 1,
         normalize: bool = True,
         obs_type: str = "png",
-        goal_type: str = "image",
     ):
         """
         Main ViNT dataset class
@@ -75,7 +74,6 @@ class ViNT_Nymeria_Dataset(Dataset):
             goals_per_obs (int): Number of goals to sample per observation
             normalize (bool): Whether to normalize the distances or actions
             obs_type (str): What data type to use for the observation. The only one supported is "image" for now.
-            goal_type (str): What data type to use for the goal. The only one supported is "image" for now.
         """
         self.data_folder = data_folder
         self.data_split_folder = data_split_folder
@@ -116,7 +114,6 @@ class ViNT_Nymeria_Dataset(Dataset):
         self.goals_per_obs = goals_per_obs
         self.normalize = normalize
         self.obs_type = obs_type
-        self.goal_type = goal_type
         self.preserve_pose_up_down = preserve_pose_up_down
 
         # load data/data_config.yaml

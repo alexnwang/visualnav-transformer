@@ -146,9 +146,8 @@ def main(rank, world_size, config):
                     end_slack=data_config["end_slack"],
                     goals_per_obs=data_config["goals_per_obs"],
                     normalize=config["normalize"],
-                    goal_type=config["goal_type"],
                     gaussian_normalization_stats_path=data_config["gaussian_normalization_stats_path"],
-                    return_xyz=True if config["goal_type"] == "point" else False,
+                    return_xyz=True if config.get("goal_type", None) == "point" else False,
                 )
                 
                 if data_config.get("repeat", 1) > 1:
