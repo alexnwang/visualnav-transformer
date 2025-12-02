@@ -178,28 +178,21 @@ def train_nomad(
     else:
         tepoch = dataloader
     for i, data in enumerate(tepoch):
-        (
-            batch_obs_images, # obs_image shape: torch.Size([256, (context_size+1) * 3, *image_size])
-            batch_goal_images, # goal_image shape: torch.Size([256, 3, *image_size])
-            deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
-            context_poses, # context poses shape: torch.Size([256, (context_size+1), 48]) # 3 context poses + current, each with 48 dimensions
-            distance, # distance shape: torch.Size([256])
-            goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
-            action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
-            first_pose, # first_pose shape: torch.Size([256, 1, 48]),
-            gt_actions_with_initial, # gt_actions_with_initial shape: torch.Size([256, 1, 48]),
-            obs_images, # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
-            goal_image, # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
-        ) = data
+        batch_obs_images = data["obs_image_transformed"].to(device, non_blocking=True)          # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
+        batch_goal_images = data["goal_image_transformed"].to(device, non_blocking=True)        # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
+        deltas = data["deltas"]                                                                 # actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
+        context_poses = data["context_poses"].to(device, non_blocking=True)                     # context_poses shape: torch.Size([256, context_size+1, 45]) # context poses
+        distance = data["distance"].to(device, non_blocking=True).float()                       # distance shape: torch.Size([256])
+        goal_pos = data["goal_pos"].to(device, non_blocking=True)                               # goal_pos shape: torch.Size([256, 1, 48]) # single position
+        action_mask = data["action_mask"].to(device, non_blocking=True)                         # action_mask shape: torch.Size([256]) # if valid action, I guess
+        first_pose = data["first_pose"]                                                         # first_pose shape: torch.Size([256, 1, 48]),
+        gt_actions_with_initial = data["gt_actions_with_initial"].to(device, non_blocking=True) # gt_actions_with_initial shape: torch.Size([256, 1, 48]),
+        obs_images = data["obs_images"]                                                         # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
+        goal_image = data["goal_image"]                                                         # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
                     
-        batch_obs_images = batch_obs_images.to(device, non_blocking=True)
-        batch_goal_images = batch_goal_images.to(device, non_blocking=True)
-        action_mask = action_mask.to(device, non_blocking=True)
-        context_poses = context_poses.to(device, non_blocking=True)
-        distance = distance.float().to(device, non_blocking=True)
         naction = deltas.to(device, non_blocking=True).float()
-        # gt_actions_with_initial = gt_actions_with_initial.to(device, non_blocking=True)[:, 0]
-        gt_actions_with_initial = goal_pos.to(device, non_blocking=True)[:, 0]
+        # gt_actions_with_initial = gt_actions_with_initial[:, 0]
+        gt_actions_with_initial = goal_pos[:, 0]
 
         B = deltas.shape[0]
 
@@ -411,28 +404,23 @@ def evaluate_nomad(
         tepoch = itertools.islice(dataloader, num_batches)
         
     for i, data in enumerate(tepoch):
-        (
-            batch_obs_images, # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
-            batch_goal_images, # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
-            deltas, #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
-            context_poses, # context_poses shape: torch.Size([256, context_size+1, 45]) # context poses
-            distance, # distance shape: torch.Size([256])
-            goal_pos, # goal_pos shape: torch.Size([256, 1, 48]) # single position
-            action_mask, # action_mask shape: torch.Size([256]) # if valid action, I guess
-            first_pose, # first_pose shape: torch.Size([256, 1, 48]),
-            gt_actions_with_initial, # gt_actions_with_initial shape: torch.Size([256, 1, 48]),
-            obs_images, # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
-            goal_image, # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
-        ) = data
-        
-        batch_obs_images = batch_obs_images.to(device, non_blocking=True)
-        batch_goal_images = batch_goal_images.to(device, non_blocking=True)
-        context_poses = context_poses.to(device, non_blocking=True)
+        batch_obs_images = data["obs_image_transformed"].to(device, non_blocking=True)          # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
+        batch_goal_images = data["goal_image_transformed"].to(device, non_blocking=True)        # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
+        deltas = data["deltas"]                                                                 #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
+        context_poses = data["context_poses"].to(device, non_blocking=True)                     # context_poses shape: torch.Size([256, context_size+1, 45]) # context poses
+        distance = data["distance"].to(device, non_blocking=True)                               # distance shape: torch.Size([256])
+        goal_pos = data["goal_pos"].to(device, non_blocking=True)                               # goal_pos shape: torch.Size([256, 1, 48]) # single position
+        action_mask = data["action_mask"]                                                       # action_mask shape: torch.Size([256]) # if valid action, I guess
+        first_pose = data["first_pose"]                                                         # first_pose shape: torch.Size([256, 1, 48]),
+        gt_actions_with_initial = data["gt_actions_with_initial"].to(device, non_blocking=True) # gt_actions_with_initial shape: torch.Size([256, 1, 48]),
+        obs_images = data["obs_images"]                                                         # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
+        goal_image = data["goal_image"]                                                         # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
         batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
         batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-        gt_actions_with_initial = gt_actions_with_initial.to(device, non_blocking=True)[:, 0]
+        gt_actions_with_initial = goal_pos[:, 0]
 
         action_mask = action_mask.to(device)
+        naction = deltas.to(device, non_blocking=True).float()
 
         B = deltas.shape[0]
 
@@ -446,10 +434,6 @@ def evaluate_nomad(
         obsgoal_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses)
         obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
         goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses)
-
-        distance = distance.to(device)
-
-        naction = deltas.to(device).float()
 
         # Sample noise to add to actions
         noise = torch.randn(naction.shape, device=device)

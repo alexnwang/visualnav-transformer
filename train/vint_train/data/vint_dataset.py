@@ -392,19 +392,32 @@ class ViNT_Nymeria_Dataset(Dataset):
             (not goal_is_negative)
         )
 
-        return (
-            obs_image_transformed.type(torch.float32),
-            goal_image_transformed.type(torch.float32),
-            deltas_torch.type(torch.float32),
-            context_poses.type(torch.float32),
-            torch.as_tensor(distance, dtype=torch.int64),
-            torch.as_tensor(goal_pos, dtype=torch.float32),
-            torch.as_tensor(action_mask, dtype=torch.float32),
-            torch.as_tensor(first_pose, dtype=torch.float32),
-            torch.as_tensor(gt_actions_with_initial[:, -1], dtype=torch.float32),
-            obs_images.type(torch.float32),
-            goal_image.type(torch.float32),
-        )
+        return {
+            "obs_image_transformed": obs_image_transformed.type(torch.float32),
+            "goal_image_transformed": goal_image_transformed.type(torch.float32),
+            "deltas": deltas_torch.type(torch.float32),
+            "context_poses": context_poses.type(torch.float32),
+            "distance": torch.as_tensor(distance, dtype=torch.int64),
+            "goal_pos": torch.as_tensor(goal_pos, dtype=torch.float32),
+            "action_mask": torch.as_tensor(action_mask, dtype=torch.float32),
+            "first_pose": torch.as_tensor(first_pose, dtype=torch.float32),
+            "gt_actions_with_initial": torch.as_tensor(gt_actions_with_initial[:, -1], dtype=torch.float32),
+            "obs_images": obs_images.type(torch.float32),
+            "goal_image": goal_image.type(torch.float32),
+        }
+        # return (
+        #     obs_image_transformed.type(torch.float32),
+        #     goal_image_transformed.type(torch.float32),
+        #     deltas_torch.type(torch.float32),
+        #     context_poses.type(torch.float32),
+        #     torch.as_tensor(distance, dtype=torch.int64),
+        #     torch.as_tensor(goal_pos, dtype=torch.float32),
+        #     torch.as_tensor(action_mask, dtype=torch.float32),
+        #     torch.as_tensor(first_pose, dtype=torch.float32),
+        #     torch.as_tensor(gt_actions_with_initial[:, -1], dtype=torch.float32),
+        #     obs_images.type(torch.float32),
+        #     goal_image.type(torch.float32),
+        # )
 
     def _get_trajectory(self, trajectory_name):
         traj_data = torch.load(os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'), weights_only=False)
