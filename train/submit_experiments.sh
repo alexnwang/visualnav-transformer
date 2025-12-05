@@ -1,7 +1,10 @@
 #!/bin/bash
 
-# 12/03/2025 2d conditioning model on fangtooth
-./submit_scripts/submit_fangtooth.sh config/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-goal2d.yaml 8
+# 12/04 returning 2d conditiong mask to 50/50 via 2d5050 
+./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-goal2d5050.yaml 4
+
+# 12/03/2025 2d conditioning model on fangtooth (65495b7ce189755d0ad5bd40ac9173da526aac1f)
+# ./submit_scripts/submit_fangtooth.sh config/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-goal2d.yaml 8
 
 # 12/02/2025 point conditioning model (f05448679025013f022cd544290adb3fa28ec436)
 # ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-goalPoint.yaml 4

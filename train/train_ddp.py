@@ -202,7 +202,7 @@ def main(rank, world_size, config):
 
     print("Creating model...")
     def get_vision_encoder():
-        if config.get("goal_type", None) == "2d":
+        if config.get("goal_type", None) in ["2d", "2d5050"]:
             goal_coordinate_dims = 8
         else:
             goal_coordinate_dims = 0

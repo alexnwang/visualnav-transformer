@@ -69,7 +69,7 @@ class ViNT_Nymeria_Dataset(Dataset):
             len_traj_pred (int): Length of trajectory of waypoints to predict if this is an action dataset
             learn_angle (bool): Whether to learn the yaw of the robot at each predicted waypoint if this is an action dataset
             context_size (int): Number of previous observations to use as context
-            goal_type (str): Type of the goal. Can be "2d" or "point"
+            goal_type (str): Type of the goal. Can be "2d" or "point" or "2d5050"
             preserve_pose_up_down (bool): Whether to preserve the pose up down orientation
             context_type (str): Whether to use temporal, randomized, or randomized temporal context
             end_slack (int): Number of timesteps to ignore at the end of the trajectory
@@ -83,7 +83,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         
         self.traj_len_key = "all_parts"
         self.goal_type = goal_type
-        assert self.goal_type in {"2d", "point"}, "goal_format must be one of 2d or point"
+        assert self.goal_type in {"2d", "point", "2d5050"}, "goal_format must be one of 2d, point, or 2d5050"
         
         traj_names_file = os.path.join(data_split_folder, "traj_names.txt")
         with open(traj_names_file, "r") as f:
@@ -418,7 +418,7 @@ class ViNT_Nymeria_Dataset(Dataset):
             goal_xyz = forward_kinematics_wrapper(gt_actions_with_initial, xsens_skel, return_euler=False) # 1, 15, 3
             ret_dict["goal_pose_xyz"] = torch.as_tensor(goal_xyz, dtype=torch.float32)
             ret_dict['xsens_offsets'] = torch.as_tensor(xsens_offsets, dtype=torch.float32)
-        elif self.goal_type == "2d":
+        elif self.goal_type in ["2d", "2d5050"]:
             ret_dict["goal_image_transformed"] = obs_image_transformed[-1]
             ret_dict["goal_image"] = obs_images[-1]
             
@@ -431,7 +431,7 @@ class ViNT_Nymeria_Dataset(Dataset):
             ret_dict["goal_image_coords"] = torch.as_tensor(key_point_image_coords, dtype=torch.float32)
         return ret_dict
         
-        # return (
+        # return (      
         #     obs_image_transformed.type(torch.float32),
         #     goal_image_transformed.type(torch.float32),
         #     deltas_torch.type(torch.float32),

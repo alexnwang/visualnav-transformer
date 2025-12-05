@@ -195,11 +195,12 @@ def train_nomad(
         goal_mask = (torch.rand((B,), device=device) < goal_mask_prob).long() # 1 if goal mask, 0 if no mask
         
         goal_coordinates = None
-        if config.get("goal_type", None) == "2d":
+        if config.get("goal_type", None) in ["2d", "2d5050"]:
             goal_image_coords = data["goal_image_coords"].to(device, non_blocking=True) # B, 4, 2
-            nonvisible_goal_mask = 1. - (goal_image_coords == -1).all(dim=-1).all(dim=-1).to(torch.float32) # 1 if goal is visible, 0 if not
-            goal_mask = (1.-((1.-goal_mask)*nonvisible_goal_mask)).long() # if goal is not visible, require goal masking
             goal_coordinates = goal_image_coords.flatten(1, 2)
+            if config.get("goal_type", None) == "2d": # only modify the goal_mask for 2d goals, rather, keep it at 50/50 for 2d5050
+                nonvisible_goal_mask = 1. - (goal_image_coords == -1).all(dim=-1).all(dim=-1).to(torch.float32) # 1 if goal is visible, 0 if not
+                goal_mask = (1.-((1.-goal_mask)*nonvisible_goal_mask)).long() # if goal is not visible, require goal masking
         if config.get("goal_type", None) == "point":
             goal_pos_xyz = data["goal_pose_xyz"].to(device, non_blocking=True)[:, 0] # B, 15, 3
             goal_pose = torch.cat(
@@ -433,7 +434,7 @@ def evaluate_nomad(
         no_mask = torch.zeros_like(rand_goal_mask).long().to(device)
         
         goal_coordinates = None
-        if config.get("goal_type", None) == "2d":
+        if config.get("goal_type", None) in ["2d", "2d5050"]:
             goal_image_coords = data["goal_image_coords"].to(device, non_blocking=True) # B, 4, 2
             goal_coordinates = goal_image_coords.flatten(1, 2) # B, 8
         
