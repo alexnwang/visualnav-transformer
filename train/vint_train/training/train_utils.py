@@ -191,6 +191,15 @@ def train_nomad(
         goal_image = data["goal_image"]                                                         # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
                     
         naction = deltas.to(device, non_blocking=True).float()
+        B = deltas.shape[0]
+        goal_mask = (torch.rand((B,), device=device) < goal_mask_prob).long() # 1 if goal mask, 0 if no mask
+        
+        goal_coordinates = None
+        if config.get("goal_type", None) == "2d":
+            goal_image_coords = data["goal_image_coords"].to(device, non_blocking=True) # B, 4, 2
+            nonvisible_goal_mask = 1. - (goal_image_coords == -1).all(dim=-1).all(dim=-1).to(torch.float32) # 1 if goal is visible, 0 if not
+            goal_mask = (1.-((1.-goal_mask)*nonvisible_goal_mask)).long() # if goal is not visible, require goal masking
+            goal_coordinates = goal_image_coords.flatten(1, 2)
         if config.get("goal_type", None) == "point":
             goal_pos_xyz = data["goal_pose_xyz"].to(device, non_blocking=True)[:, 0] # B, 15, 3
             goal_pose = torch.cat(
@@ -199,11 +208,8 @@ def train_nomad(
         else:
             # goal_pose = gt_actions_with_initial[:, 0]
             goal_pose = goal_pos[:, 0]
-        B = deltas.shape[0]
 
-        # Generate random goal mask
-        goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device) # 1 if goal mask, 0 if no mask
-        obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses)
+        obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
         # Predict distance
         dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
         dist_loss = nn.functional.mse_loss(dist_pred.squeeze(-1), distance)
@@ -258,6 +264,7 @@ def train_nomad(
                 batch_obs_images, batch_goal_images, goal_pose, context_poses,
                 pred_horizon=deltas.shape[1], action_dim=deltas.shape[2],
                 num_samples=1,device=device,
+                goal_coordinates=goal_coordinates,
             )
             model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
                 model_output_dict["gc_actions"].flatten(0, 1)
@@ -324,6 +331,7 @@ def train_nomad(
             "total_loss": loss.clone(),
             "dist_loss": dist_loss.clone(),
             "diffusion_loss": diffusion_loss.clone(),
+            "goal_mask_prob": goal_mask.float().mean().clone(),
         }
         if torch.distributed.is_initialized():
             for key, value in reduced_values.items():
@@ -417,6 +425,18 @@ def evaluate_nomad(
         obs_images = data["obs_images"]                                                         # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
         goal_image = data["goal_image"]                                                         # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
         
+        B = deltas.shape[0]
+
+        # Generate random goal mask
+        rand_goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
+        goal_mask = torch.ones_like(rand_goal_mask).long().to(device)
+        no_mask = torch.zeros_like(rand_goal_mask).long().to(device)
+        
+        goal_coordinates = None
+        if config.get("goal_type", None) == "2d":
+            goal_image_coords = data["goal_image_coords"].to(device, non_blocking=True) # B, 4, 2
+            goal_coordinates = goal_image_coords.flatten(1, 2) # B, 8
+        
         naction = deltas.to(device, non_blocking=True).float()
         
         if config.get("goal_type", None) == "point":
@@ -431,18 +451,11 @@ def evaluate_nomad(
         batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
         batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
 
-        B = deltas.shape[0]
+        rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
 
-        # Generate random goal mask
-        rand_goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
-        goal_mask = torch.ones_like(rand_goal_mask).long().to(device)
-        no_mask = torch.zeros_like(rand_goal_mask).long().to(device)
-
-        rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask, context_poses=context_poses)
-
-        obsgoal_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses)
+        obsgoal_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
         obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
-        goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses)
+        goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
 
         # Sample noise to add to actions
         noise = torch.randn(naction.shape, device=device)
@@ -507,6 +520,7 @@ def evaluate_nomad(
             action_dim=deltas.shape[2],
             num_samples=1,
             device=device,
+            goal_coordinates=goal_coordinates,
         )
         model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
             model_output_dict["gc_actions"].flatten(0, 1)
@@ -604,18 +618,19 @@ def model_output(
     action_dim: int,
     num_samples: int,
     device: torch.device,
+    goal_coordinates: torch.Tensor = None,
 ):
     """
     Generate model output (conditioned, unconditioned, distance) for the given batch of images.
     Outputs are DELTAS and are NOT unnormalized or scaled.
     """
     goal_mask = torch.ones((batch_goal_images.shape[0],)).long().to(device)
-    obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses)
+    obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
     # obs_cond = obs_cond.flatten(start_dim=1)
     obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
 
     no_mask = torch.zeros((batch_goal_images.shape[0],)).long().to(device)
-    obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses)
+    obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
     
     # obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
     gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)

@@ -42,7 +42,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         negative_goals: bool,
         len_traj_pred: int,
         context_size: int,
-        return_xyz: bool = False,
+        goal_type: Optional[str] = None,
         preserve_pose_up_down: bool = False,
         context_type: str = "temporal",
         end_slack: int = 0,
@@ -69,6 +69,8 @@ class ViNT_Nymeria_Dataset(Dataset):
             len_traj_pred (int): Length of trajectory of waypoints to predict if this is an action dataset
             learn_angle (bool): Whether to learn the yaw of the robot at each predicted waypoint if this is an action dataset
             context_size (int): Number of previous observations to use as context
+            goal_type (str): Type of the goal. Can be "2d" or "point"
+            preserve_pose_up_down (bool): Whether to preserve the pose up down orientation
             context_type (str): Whether to use temporal, randomized, or randomized temporal context
             end_slack (int): Number of timesteps to ignore at the end of the trajectory
             goals_per_obs (int): Number of goals to sample per observation
@@ -80,7 +82,8 @@ class ViNT_Nymeria_Dataset(Dataset):
         self.dataset_name = dataset_name
         
         self.traj_len_key = "all_parts"
-        self.return_xyz = return_xyz
+        self.goal_type = goal_type
+        assert self.goal_type in {"2d", "point"}, "goal_format must be one of 2d or point"
         
         traj_names_file = os.path.join(data_split_folder, "traj_names.txt")
         with open(traj_names_file, "r") as f:
@@ -404,8 +407,8 @@ class ViNT_Nymeria_Dataset(Dataset):
             "obs_images": obs_images.type(torch.float32),
             "goal_image": goal_image.type(torch.float32),
         }
-        if self.return_xyz:
-            if "xsens_offsets" in curr_traj_data:
+        if self.goal_type == "point": # late fusion semi "cheat" model
+            if False: #"xsens_offsets" in curr_traj_data:
                 raise NotImplementedError("xsens_offsets not supported for point conditioning yet, need to implement metric computations in train_utils.py")
                 xsens_offsets = curr_traj_data["xsens_offsets"]
                 xsens_skel = XsensSkeleton(offsets=curr_traj_data["xsens_offsets"])
@@ -415,6 +418,17 @@ class ViNT_Nymeria_Dataset(Dataset):
             goal_xyz = forward_kinematics_wrapper(gt_actions_with_initial, xsens_skel, return_euler=False) # 1, 15, 3
             ret_dict["goal_pose_xyz"] = torch.as_tensor(goal_xyz, dtype=torch.float32)
             ret_dict['xsens_offsets'] = torch.as_tensor(xsens_offsets, dtype=torch.float32)
+        elif self.goal_type == "2d":
+            ret_dict["goal_image_transformed"] = obs_image_transformed[-1]
+            ret_dict["goal_image"] = obs_images[-1]
+            
+            assert "image_projection_matrix" in curr_traj_data, "image_projection_matrix not found in trajectory data"
+            target_idx = goal_time - curr_time + (curr_traj_data["image_projection_matrix"].shape[1] // 2)
+            image_coords = curr_traj_data["image_projection_matrix"][curr_time, target_idx, :] # K, 2
+            key_point_image_coords = torch.stack(
+                [image_coords[XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "L_Hand", "R_Hand"]]
+            , dim=0) # 4, 2
+            ret_dict["goal_image_coords"] = torch.as_tensor(key_point_image_coords, dtype=torch.float32)
         return ret_dict
         
         # return (

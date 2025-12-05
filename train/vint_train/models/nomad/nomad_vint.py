@@ -23,6 +23,7 @@ class NoMaD_ViNT(nn.Module):
         project_encoding: Optional[bool] = False,
         pos_enc_3d: Optional[bool] = False,
         pool_curr_obs: Optional[bool] = False,
+        goal_coordinate_dims: Optional[int] = 0.
     ) -> None:
         """
         NoMaD ViNT Encoder class
@@ -36,6 +37,7 @@ class NoMaD_ViNT(nn.Module):
         self.project_encoding = project_encoding
         self.pos_enc_3d = pos_enc_3d
         self.pool_curr_obs = pool_curr_obs
+        self.goal_coordinate_dims = goal_coordinate_dims
         
         if "efficientnet" in obs_encoder:
             # Initialize the observation encoder
@@ -128,6 +130,9 @@ class NoMaD_ViNT(nn.Module):
         
         if self.proprioception:
             self.proprioception_encoder = nn.Linear(45, obs_encoding_size)
+        
+        if self.goal_coordinate_dims > 0:
+            self.goal_coordinate_encoder = nn.Linear(self.goal_coordinate_dims, self.obs_encoding_size)
 
         # Definition of the goal mask (convention: 0 = no mask, 1 = mask)
         self.goal_mask = torch.zeros((1, self.context_size + 2), dtype=torch.bool)
@@ -184,7 +189,8 @@ class NoMaD_ViNT(nn.Module):
 
     def forward(self, obs_img: torch.tensor, goal_img: torch.tensor,
                 input_goal_mask: torch.tensor = None,
-                context_poses: torch.tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
+                context_poses: torch.tensor = None,
+                goal_coordinates: torch.tensor = None) -> Tuple[torch.Tensor, torch.Tensor]:
         device = obs_img.device
         
         if self.proprioception:
@@ -199,7 +205,11 @@ class NoMaD_ViNT(nn.Module):
 
         # Get the goal encoding
         obsgoal_img = torch.cat([obs_img[:, self.context_size], goal_img], dim=1) if self.encoder_type == "efficientnet" else goal_img
-        goal_encoding = self.extract_features(obsgoal_img, mode="goal")
+        goal_encoding = self.extract_features(obsgoal_img, mode="goal") # N, L, D (L=1 if pool_features=True)
+        
+        if goal_coordinates is not None:
+            assert goal_coordinates.shape[-1] == self.goal_coordinate_dims, "Goal coordinates must have {self.goal_coordinate_dims} dimensions"
+            goal_encoding = goal_encoding + self.goal_coordinate_encoder(goal_coordinates)[:, None]
         
         # Get the observation encoding
         B, Cplus1 = obs_img.shape[:2]

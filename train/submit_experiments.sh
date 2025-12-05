@@ -1,10 +1,13 @@
 #!/bin/bash
 
+# 12/03/2025 2d conditioning model on fangtooth
+./submit_scripts/submit_fangtooth.sh config/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-goal2d.yaml 8
+
 # 12/02/2025 point conditioning model (f05448679025013f022cd544290adb3fa28ec436)
-./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-goalPoint.yaml 4
+# ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-goalPoint.yaml 4
 
 # 12/01/2025 lowered lr (b08c0869545c49b74a409191facea07aabff26b7)
-./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-cheat.yaml 4 # lower lr because the 1e-3 is fluctuating
+# ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-cheat.yaml 4 # lower lr because the 1e-3 is fluctuating
 
 # 12/01/2025 cheat model post fix (cdafef8f5383278548a0dede70c06c7ff585689c)
 # ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr1e-3-pool_curr_obs-cheat.yaml 4

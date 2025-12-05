@@ -141,13 +141,13 @@ def main(rank, world_size, config):
                     negative_goals=data_config["negative_goals"],
                     len_traj_pred=config["len_traj_pred"],
                     context_size=config["context_size"],
+                    goal_type=config.get("goal_type", None),
                     preserve_pose_up_down=data_config.get("preserve_pose_up_down", False),
                     context_type=config["context_type"],
                     end_slack=data_config["end_slack"],
                     goals_per_obs=data_config["goals_per_obs"],
                     normalize=config["normalize"],
                     gaussian_normalization_stats_path=data_config["gaussian_normalization_stats_path"],
-                    return_xyz=True if config.get("goal_type", None) == "point" else False,
                 )
                 
                 if data_config.get("repeat", 1) > 1:
@@ -202,6 +202,10 @@ def main(rank, world_size, config):
 
     print("Creating model...")
     def get_vision_encoder():
+        if config.get("goal_type", None) == "2d":
+            goal_coordinate_dims = 8
+        else:
+            goal_coordinate_dims = 0
         vision_encoder = NoMaD_ViNT(
             obs_encoder=config["obs_encoder"],
             obs_encoding_size=config["encoding_size"],
@@ -215,6 +219,7 @@ def main(rank, world_size, config):
             project_encoding=config.get("project_encoding", False),
             pos_enc_3d=config.get("pos_enc_3d", False),
             pool_curr_obs=config.get("pool_curr_obs", False),
+            goal_coordinate_dims=goal_coordinate_dims,
         )
         vision_encoder = replace_bn_with_gn(vision_encoder)
         return vision_encoder
