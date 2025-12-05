@@ -9,6 +9,6 @@ if [ -z "$CONFIG_FILE" ]; then
     exit 1
 fi
 source activate nomad_train
-cd /home/anw2067/visualnav-transformer/train
+cd /home/alexnwang/visualnav-transformer/train
 
 ./run.sh ${CONFIG_FILE} ${NUM_GPUS}

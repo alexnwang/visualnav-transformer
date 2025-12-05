@@ -320,23 +320,19 @@ def train_nomad(
                         wandb.log({f"train_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
 
         # logging
-        reduced_loss = loss.clone()
-        reduced_dist_loss = dist_loss.clone()
-        reduced_diffusion_loss = diffusion_loss.clone()
-        
+        reduced_values = {
+            "total_loss": loss.clone(),
+            "dist_loss": dist_loss.clone(),
+            "diffusion_loss": diffusion_loss.clone(),
+        }
         if torch.distributed.is_initialized():
-            torch.distributed.all_reduce(reduced_loss, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(reduced_dist_loss, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(reduced_diffusion_loss, op=torch.distributed.ReduceOp.SUM)
-            reduced_loss = reduced_loss / torch.distributed.get_world_size()
-            reduced_dist_loss = reduced_dist_loss / torch.distributed.get_world_size()
-            reduced_diffusion_loss = reduced_diffusion_loss / torch.distributed.get_world_size()
+            for key, value in reduced_values.items():
+                torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
+                reduced_values[key] = reduced_values[key] / torch.distributed.get_world_size()
             
         if use_wandb and i % wandb_log_freq == 0 and rank == 0:
             wandb.log({
-                "total_loss": reduced_loss,
-                "dist_loss": reduced_dist_loss,
-                "diffusion_loss": reduced_diffusion_loss,
+                **{key: value.item() for key, value in reduced_values.items()},
                 "lr": optimizer.param_groups[0]["lr"]
             })
                         
@@ -482,20 +478,19 @@ def evaluate_nomad(
         goal_mask_loss = nn.functional.mse_loss(goal_mask_noise_pred, noise)
         
         # Accumulate losses
-        reduced_rand_mask_loss = rand_mask_loss.clone()
-        reduced_no_mask_loss = no_mask_loss.clone()
-        reduced_goal_mask_loss = goal_mask_loss.clone()
+        reduce_dict = {
+            "rand_mask_loss": rand_mask_loss.clone(),
+            "no_mask_loss": no_mask_loss.clone(),
+            "goal_mask_loss": goal_mask_loss.clone(),
+        }
         if torch.distributed.is_initialized():
-            torch.distributed.all_reduce(reduced_rand_mask_loss, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(reduced_no_mask_loss, op=torch.distributed.ReduceOp.SUM)
-            torch.distributed.all_reduce(reduced_goal_mask_loss, op=torch.distributed.ReduceOp.SUM)
-            reduced_rand_mask_loss = reduced_rand_mask_loss / torch.distributed.get_world_size()
-            reduced_no_mask_loss = reduced_no_mask_loss / torch.distributed.get_world_size()
-            reduced_goal_mask_loss = reduced_goal_mask_loss / torch.distributed.get_world_size()
+            for key, value in reduce_dict.items():
+                torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
+                reduce_dict[key] = reduce_dict[key] / torch.distributed.get_world_size()
             
-        rand_mask_loss_list.append(reduced_rand_mask_loss.item())
-        no_mask_loss_list.append(reduced_no_mask_loss.item())
-        goal_mask_loss_list.append(reduced_goal_mask_loss.item())
+        rand_mask_loss_list.append(reduce_dict["rand_mask_loss"].item())
+        no_mask_loss_list.append(reduce_dict["no_mask_loss"].item())
+        goal_mask_loss_list.append(reduce_dict["goal_mask_loss"].item())
 
         if isinstance(tepoch, tqdm.tqdm):
             tepoch.set_postfix(loss=rand_mask_loss.item())
