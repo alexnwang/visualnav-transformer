@@ -12,6 +12,7 @@ import torch
 from torchvision import transforms
 from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
+from torchvision.utils import draw_keypoints
 
 from scipy.spatial.transform import Rotation as R
 
@@ -69,7 +70,7 @@ class ViNT_Nymeria_Dataset(Dataset):
             len_traj_pred (int): Length of trajectory of waypoints to predict if this is an action dataset
             learn_angle (bool): Whether to learn the yaw of the robot at each predicted waypoint if this is an action dataset
             context_size (int): Number of previous observations to use as context
-            goal_type (str): Type of the goal. Can be "2d" or "point" or "2d5050"
+            goal_type (str): Type of the goal. Can be "2d" or "point" or "2d5050" or "draw"
             preserve_pose_up_down (bool): Whether to preserve the pose up down orientation
             context_type (str): Whether to use temporal, randomized, or randomized temporal context
             end_slack (int): Number of timesteps to ignore at the end of the trajectory
@@ -83,7 +84,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         
         self.traj_len_key = "all_parts"
         self.goal_type = goal_type
-        assert self.goal_type in {"2d", "point", "2d5050"}, "goal_format must be one of 2d, point, or 2d5050"
+        assert self.goal_type in {"2d", "point", "2d5050", "draw"}, "goal_format must be one of 2d, point, or 2d5050"
         
         traj_names_file = os.path.join(data_split_folder, "traj_names.txt")
         with open(traj_names_file, "r") as f:
@@ -337,12 +338,12 @@ class ViNT_Nymeria_Dataset(Dataset):
             raise ValueError(f"Invalid context type {self.context_type}")
 
         obs_images = torch.stack([
-            self._load_image(f, t) for f, t in context
+            self._load_image(f, t) for f, t in context # these are C, H, W tensors
         ], dim=0)
         obs_image_transformed = self.transform(obs_images)
 
         # Load goal image
-        goal_image = self._load_image(f_goal, goal_time)
+        goal_image = self._load_image(f_goal, goal_time) # this is already a C, H, W tensor
         goal_image_transformed = self.transform(goal_image)
 
         # Load other trajectory data
@@ -429,6 +430,21 @@ class ViNT_Nymeria_Dataset(Dataset):
                 [image_coords[XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "L_Hand", "R_Hand"]]
             , dim=0) # 4, 2
             ret_dict["goal_image_coords"] = torch.as_tensor(key_point_image_coords, dtype=torch.float32)
+        elif self.goal_type == "draw":
+            untransformed_current_obs = obs_images[-1]
+            
+            target_idx = goal_time - curr_time + (curr_traj_data["image_projection_matrix"].shape[1] // 2) # offset = goal_time-curr_time. but shift over by half, so offset of 8 -> 16 but need  for current + 8
+            image_coords = curr_traj_data["image_projection_matrix"][curr_time, target_idx, :] # K, 2
+            key_point_image_coords = torch.stack(
+                [image_coords[XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "L_Hand", "R_Hand"]]
+            , dim=0) # 4, 2
+            for index, color in zip(range(len(key_point_image_coords)), ["red", "green", "blue", "yellow"]):
+                if all(key_point_image_coords[index] == -1): continue
+                drawn = True
+                points = key_point_image_coords[index:index+1, None, :] / 2880 * 224
+                untransformed_current_obs = draw_keypoints(untransformed_current_obs, points, colors=color, radius=4)
+            ret_dict["goal_image_transformed"] = self.transform(untransformed_current_obs)
+            ret_dict["goal_image"] = untransformed_current_obs
         return ret_dict
         
         # return (      
