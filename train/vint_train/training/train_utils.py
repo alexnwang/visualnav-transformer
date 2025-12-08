@@ -84,44 +84,6 @@ def _compute_3d_joint_metrics(
     }
 
 
-def _compute_metrics_nomad(
-    model_output_dict: Dict[str, torch.Tensor],
-    batch_dist_label: torch.Tensor,
-    batch_action_label: torch.Tensor,
-    action_mask: torch.Tensor,
-):
-    """
-    Compute losses for distance and action prediction.
-    """
-
-    uc_actions = model_output_dict['uc_actions']
-    gc_actions = model_output_dict['gc_actions']
-    gc_distance = model_output_dict['gc_distance']
-
-    gc_dist_loss = F.mse_loss(gc_distance, batch_dist_label.unsqueeze(-1))
-
-    def action_reduce(unreduced_loss: torch.Tensor):
-        # Reduce over non-batch dimensions to get loss per batch element
-        while unreduced_loss.dim() > 1:
-            unreduced_loss = unreduced_loss.mean(dim=-1)
-        assert unreduced_loss.shape == action_mask.shape, f"{unreduced_loss.shape} != {action_mask.shape}"
-        return (unreduced_loss * action_mask).mean() / (action_mask.mean() + 1e-2)
-
-    # Mask out invalid inputs (for negatives, or when the distance between obs and goal is large)
-    assert uc_actions.shape == batch_action_label.shape, f"{uc_actions.shape} != {batch_action_label.shape}"
-    assert gc_actions.shape == batch_action_label.shape, f"{gc_actions.shape} != {batch_action_label.shape}"
-
-    uc_action_loss = action_reduce(F.mse_loss(uc_actions, batch_action_label, reduction="none"))
-    gc_action_loss = action_reduce(F.mse_loss(gc_actions, batch_action_label, reduction="none"))
-
-    results = {
-        "uc_action_loss": uc_action_loss,
-        "gc_dist_loss": gc_dist_loss,
-        "gc_action_loss": gc_action_loss,
-    }
-
-    return results
-
 def reduce_metrics(mdict):
     for key, value in mdict.items():
         torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
@@ -280,14 +242,10 @@ def train_nomad(
             # Compute metrics
             if i % print_log_freq == 0:
                 _3dp_metrics = _compute_3d_joint_metrics(model_output_dict, deltas.to(device), action_mask.to(device), first_pose.to(device), XsensSkeleton())
-                metrics = _compute_metrics_nomad(model_output_dict, distance.to(device), deltas.to(device), action_mask.to(device))
                 if torch.distributed.is_initialized(): # Reduce all metrics across ranks by averaging
-                    metrics = reduce_metrics(metrics)
                     _3dp_metrics = reduce_metrics(_3dp_metrics)
                 
                 data_log = {}
-                for key, value in metrics.items():
-                    data_log[key] = value.item()
                 data_log['uc_leaf_xyz'], data_log['uc_leaf_angular_distance'] = 0, 0
                 data_log['gc_leaf_xyz'], data_log['gc_leaf_angular_distance'] = 0, 0
                 for key, value in _3dp_metrics.items():
@@ -532,23 +490,12 @@ def evaluate_nomad(
         
         # unnormalize from gaussian for loss metrics and visualizations
         deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
-
-        metrics = _compute_metrics_nomad(
-                    model_output_dict,
-                    distance.to(device),
-                    deltas.to(device),
-                    action_mask.to(device),
-                )
         
         _3dp_metrics = _compute_3d_joint_metrics(model_output_dict, deltas.to(device), action_mask.to(device), first_pose.to(device), XsensSkeleton())
-        
         if torch.distributed.is_initialized(): # Reduce all metrics across ranks by averaging
-            metrics = reduce_metrics(metrics)
             _3dp_metrics = reduce_metrics(_3dp_metrics)
         
         data_log = {}
-        for key, value in metrics.items():
-            data_log[f"eval/{key}"] = value.item()
         data_log["eval/uc_leaf_xyz"], data_log['eval/uc_leaf_angular_distance'] = 0, 0
         data_log["eval/gc_leaf_xyz"], data_log['eval/gc_leaf_angular_distance'] = 0, 0
         for key, value in _3dp_metrics.items():
