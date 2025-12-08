@@ -395,6 +395,19 @@ class ViNT_Nymeria_Dataset(Dataset):
             (not goal_is_negative)
         )
 
+        # always return goal_image_coords
+        target_idx = goal_time - curr_time + (curr_traj_data["image_projection_matrix"].shape[1] // 2)
+        image_coords = curr_traj_data["image_projection_matrix"][curr_time, target_idx, :] # K, 2
+        
+        # Swap x and y, and invert the new y axis
+        rotated_image_coords = torch.empty_like(image_coords)
+        rotated_image_coords[:, 0] = 2880 - 1 - image_coords[:, 1]  # new x
+        rotated_image_coords[:, 1] = image_coords[:, 0]  # new y
+        # keep the -1 elements
+        rotated_image_coords = rotated_image_coords / 2880 * self.image_size[0]
+        rotated_image_coords[image_coords == -1] = -1
+        image_coords = rotated_image_coords
+
         ret_dict = {
             "obs_image_transformed": obs_image_transformed.type(torch.float32),
             "goal_image_transformed": goal_image_transformed.type(torch.float32),
@@ -407,10 +420,11 @@ class ViNT_Nymeria_Dataset(Dataset):
             "gt_actions_with_initial": torch.as_tensor(gt_actions_with_initial, dtype=torch.float32),
             "obs_images": obs_images.type(torch.float32),
             "goal_image": goal_image.type(torch.float32),
+            "goal_image_coords": torch.as_tensor(image_coords, dtype=torch.float32),
         }
+        
         if self.goal_type == "point": # late fusion semi "cheat" model
             if False: #"xsens_offsets" in curr_traj_data:
-                raise NotImplementedError("xsens_offsets not supported for point conditioning yet, need to implement metric computations in train_utils.py")
                 xsens_offsets = curr_traj_data["xsens_offsets"]
                 xsens_skel = XsensSkeleton(offsets=curr_traj_data["xsens_offsets"])
             else:
@@ -422,44 +436,18 @@ class ViNT_Nymeria_Dataset(Dataset):
         elif self.goal_type in ["2d", "2d5050"]:
             ret_dict["goal_image_transformed"] = obs_image_transformed[-1]
             ret_dict["goal_image"] = obs_images[-1]
-            
-            assert "image_projection_matrix" in curr_traj_data, "image_projection_matrix not found in trajectory data"
-            target_idx = goal_time - curr_time + (curr_traj_data["image_projection_matrix"].shape[1] // 2)
-            image_coords = curr_traj_data["image_projection_matrix"][curr_time, target_idx, :] # K, 2
-            key_point_image_coords = torch.stack(
-                [image_coords[XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "L_Hand", "R_Hand"]]
-            , dim=0) # 4, 2
-            ret_dict["goal_image_coords"] = torch.as_tensor(key_point_image_coords, dtype=torch.float32)
         elif self.goal_type == "draw":
             untransformed_current_obs = obs_images[-1]
-            
-            target_idx = goal_time - curr_time + (curr_traj_data["image_projection_matrix"].shape[1] // 2) # offset = goal_time-curr_time. but shift over by half, so offset of 8 -> 16 but need  for current + 8
-            image_coords = curr_traj_data["image_projection_matrix"][curr_time, target_idx, :] # K, 2
             key_point_image_coords = torch.stack(
-                [image_coords[XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "L_Hand", "R_Hand"]]
+                [image_coords[XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]
             , dim=0) # 4, 2
             for index, color in zip(range(len(key_point_image_coords)), ["red", "green", "blue", "yellow"]):
                 if all(key_point_image_coords[index] == -1): continue
-                drawn = True
-                points = key_point_image_coords[index:index+1, None, :] / 2880 * 224
+                points = key_point_image_coords[index:index+1, None, :]
                 untransformed_current_obs = draw_keypoints(untransformed_current_obs, points, colors=color, radius=4)
             ret_dict["goal_image_transformed"] = self.transform(untransformed_current_obs)
             ret_dict["goal_image"] = untransformed_current_obs
         return ret_dict
-        
-        # return (      
-        #     obs_image_transformed.type(torch.float32),
-        #     goal_image_transformed.type(torch.float32),
-        #     deltas_torch.type(torch.float32),
-        #     context_poses.type(torch.float32),
-        #     torch.as_tensor(distance, dtype=torch.int64),
-        #     torch.as_tensor(goal_pos, dtype=torch.float32),
-        #     torch.as_tensor(action_mask, dtype=torch.float32),
-        #     torch.as_tensor(first_pose, dtype=torch.float32),
-        #     torch.as_tensor(gt_actions_with_initial[:, -1], dtype=torch.float32),
-        #     obs_images.type(torch.float32),
-        #     goal_image.type(torch.float32),
-        # )
 
     def _get_trajectory(self, trajectory_name):
         traj_data = torch.load(os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'), weights_only=False)

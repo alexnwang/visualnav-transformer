@@ -151,15 +151,17 @@ def train_nomad(
         gt_actions_with_initial = data["gt_actions_with_initial"].to(device, non_blocking=True) # gt_actions_with_initial shape: torch.Size([256, 1, 48]),
         obs_images = data["obs_images"]                                                         # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
         goal_image = data["goal_image"]                                                         # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
-                    
+        goal_image_coords = data["goal_image_coords"].to(device, non_blocking=True)             # goal_image_coords shape: torch.Size([256, 4, 2])
+
         naction = deltas.to(device, non_blocking=True).float()
         B = deltas.shape[0]
         goal_mask = (torch.rand((B,), device=device) < goal_mask_prob).long() # 1 if goal mask, 0 if no mask
         
         goal_coordinates = None
         if config.get("goal_type", None) in ["2d", "2d5050"]:
-            goal_image_coords = data["goal_image_coords"].to(device, non_blocking=True) # B, 4, 2
-            goal_coordinates = goal_image_coords.flatten(1, 2)
+            goal_coordinates = torch.stack(
+                [goal_image_coords[:, XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]
+            , dim=1).flatten(1, 2) # B, 4*2
             if config.get("goal_type", None) == "2d": # only modify the goal_mask for 2d goals, rather, keep it at 50/50 for 2d5050
                 nonvisible_goal_mask = 1. - (goal_image_coords == -1).all(dim=-1).all(dim=-1).to(torch.float32) # 1 if goal is visible, 0 if not
                 goal_mask = (1.-((1.-goal_mask)*nonvisible_goal_mask)).long() # if goal is not visible, require goal masking
@@ -383,6 +385,7 @@ def evaluate_nomad(
         gt_actions_with_initial = data["gt_actions_with_initial"].to(device, non_blocking=True) # gt_actions_with_initial shape: torch.Size([256, 1, 48]),
         obs_images = data["obs_images"]                                                         # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
         goal_image = data["goal_image"]                                                         # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
+        goal_image_coords = data["goal_image_coords"].to(device, non_blocking=True)             # goal_image_coords shape: torch.Size([256, 4, 2])
         
         B = deltas.shape[0]
 
@@ -391,13 +394,13 @@ def evaluate_nomad(
         goal_mask = torch.ones_like(rand_goal_mask).long().to(device)
         no_mask = torch.zeros_like(rand_goal_mask).long().to(device)
         
-        goal_coordinates = None
-        if config.get("goal_type", None) in ["2d", "2d5050"]:
-            goal_image_coords = data["goal_image_coords"].to(device, non_blocking=True) # B, 4, 2
-            goal_coordinates = goal_image_coords.flatten(1, 2) # B, 8
-        
         naction = deltas.to(device, non_blocking=True).float()
         
+        goal_coordinates = None
+        if config.get("goal_type", None) in ["2d", "2d5050"]:
+            goal_coordinates = torch.stack(
+                [goal_image_coords[:, XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis", "Head", "R_Hand", "L_Hand"]]
+            , dim=1).flatten(1, 2) # B, 4*2
         if config.get("goal_type", None) == "point":
             goal_pos_xyz = data["goal_pose_xyz"].to(device, non_blocking=True)[:, 0] # B, 15, 3
             goal_pose = torch.cat(
