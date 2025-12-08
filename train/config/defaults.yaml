@@ -35,7 +35,7 @@ alpha: 0.5
 beta: 0.1
 
 obs_type: image
-goal_type: image
+# goal_type: image
 scheduler: null
 
 # distance bounds for distance and action and distance predictions 

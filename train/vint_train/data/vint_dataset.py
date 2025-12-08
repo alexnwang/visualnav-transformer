@@ -84,7 +84,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         
         self.traj_len_key = "all_parts"
         self.goal_type = goal_type
-        assert self.goal_type in {"2d", "point", "2d5050", "draw"}, "goal_format must be one of 2d, point, or 2d5050"
+        assert self.goal_type in {None, "2d", "point", "2d5050", "draw"}, "goal_format must be one of 2d, point, or 2d5050"
         
         traj_names_file = os.path.join(data_split_folder, "traj_names.txt")
         with open(traj_names_file, "r") as f:
