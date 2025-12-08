@@ -66,7 +66,7 @@ len_traj_pred: 8
 image_size: [224, 224] # width, height
 datasets:
   nymeria:
-    data_folder: /datasets/nymeria/2025-08-31_2251_backup/nymeria_head_only_processed_4fps_smpl
+    data_folder: /home/alexnwang/nymeria_dataset/nymeria_visibility_matrices_with_offsets_v2
     train: /home/alexnwang/wm_fbc-ar_model/data_splits/nymeria/train/
     test: /home/alexnwang/wm_fbc-ar_model/data_splits/nymeria/test/
     action_stats:

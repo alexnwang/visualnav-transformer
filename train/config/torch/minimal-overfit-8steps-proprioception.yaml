@@ -69,7 +69,7 @@ image_size: [224, 224] # width, height
 datasets:
   nymeria:
     repeat: 100
-    data_folder: /scratch/anw2067/nymeria
+    data_folder: /scratch/anw2067/nymeria_visibility_matrix
     train: data_splits/nymeria_singleton/train/
     test: data_splits/nymeria_singleton/test/
     action_stats:

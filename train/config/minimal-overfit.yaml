@@ -65,7 +65,7 @@ image_size: [224, 224] # width, height
 datasets:
   nymeria:
     repeat: 100
-    data_folder: /datasets/nymeria/2025-08-31_2251_backup/nymeria_head_only_processed_4fps_smpl
+    data_folder: /home/alexnwang/nymeria_dataset/nymeria_visibility_matrices_with_offsets_v2
     train: data_splits/nymeria_singleton/train/
     test: data_splits/nymeria_singleton/test/
     action_stats:

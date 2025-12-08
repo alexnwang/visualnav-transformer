@@ -71,7 +71,7 @@ len_traj_pred: 4
 image_size: [224, 224] # width, height
 datasets:
   nymeria:
-    data_folder: /scratch/anw2067/nymeria
+    data_folder: /scratch/anw2067/nymeria_visibility_matrix
     train: data_splits/nymeria/train/
     test: data_splits/nymeria/test/
     action_stats:
