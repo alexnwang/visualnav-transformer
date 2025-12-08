@@ -69,8 +69,8 @@ def _compute_3d_joint_metrics(
             if actn_mask is not None:
                 ang_dist = ang_dist * actn_mask
                 xyz_dist = xyz_dist * actn_mask
-            res[f"{body_part_name}-angular_distance"] = ang_dist.mean()
-            res[f"{body_part_name}-xyz_distance"] = xyz_dist.mean()
+            res[f"{body_part_name}-angular_distance"] = ang_dist
+            res[f"{body_part_name}-xyz_distance"] = xyz_dist
         return res
     
     uc_3d_joint_metrics_dict = _compute_pose_and_loss(uc_actions[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
@@ -78,9 +78,9 @@ def _compute_3d_joint_metrics(
     init_3d_joint_metrics_dict = _compute_pose_and_loss(first_pose[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
     
     return {
-        **{f"uc_{key}": value for key, value in uc_3d_joint_metrics_dict.items()},
-        **{f"gc_{key}": value for key, value in gc_3d_joint_metrics_dict.items()},
-        **{f"init_{key}": value for key, value in init_3d_joint_metrics_dict.items()},
+        **{f"uc-{key}": value for key, value in uc_3d_joint_metrics_dict.items()},
+        **{f"gc-{key}": value for key, value in gc_3d_joint_metrics_dict.items()},
+        **{f"init-{key}": value for key, value in init_3d_joint_metrics_dict.items()},
     }
 
 
@@ -157,6 +157,7 @@ def train_nomad(
         B = deltas.shape[0]
         goal_mask = (torch.rand((B,), device=device) < goal_mask_prob).long() # 1 if goal mask, 0 if no mask
         
+        goal_visible_mask = 1. - (goal_image_coords != -1).all(dim=2).to(torch.float32) # B, K, 2 -> B, K (K = # parts)
         goal_coordinates = None
         if config.get("goal_type", None) in ["2d", "2d5050"]:
             goal_coordinates = torch.stack(
@@ -179,7 +180,6 @@ def train_nomad(
         dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
         dist_loss = nn.functional.mse_loss(dist_pred.squeeze(-1), distance)
         dist_loss = (dist_loss * (1 - goal_mask.float())).mean() / (1e-2 +(1 - goal_mask.float()).mean())
-
 
         # Sample noise to add to actions
         noise = torch.randn(naction.shape, device=device)
@@ -248,21 +248,44 @@ def train_nomad(
                     _3dp_metrics = reduce_metrics(_3dp_metrics)
                 
                 data_log = {}
-                data_log['uc_leaf_xyz'], data_log['uc_leaf_angular_distance'] = 0, 0
-                data_log['gc_leaf_xyz'], data_log['gc_leaf_angular_distance'] = 0, 0
+                data_log['uc-leaf-xyz'], data_log['uc-leaf-angular'] = 0, 0
+                data_log['gc-leaf-xyz'], data_log['gc-leaf-angular'] = 0, 0
+                data_log['gc-leaf-xyz-visible'], data_log['gc-leaf-xyz-notVisible'] = 0, 0
+                data_log['gc-leaf-angular-visible'], data_log['gc-leaf-angular-notVisible'] = 0, 0
                 for key, value in _3dp_metrics.items():
                     if "init" in key:
-                        data_log[f"segments_init/{key}"] = value.item()
-                    elif any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                        data_log[f"segments_leaf/{key}"] = value.item()
-                        if "uc" in key: 
-                            if "xyz" in key: data_log['uc_leaf_xyz'] += value.item() / 4.
-                            elif "angular" in key: data_log['uc_leaf_angular_distance'] += value.item() / 4.
-                        elif "gc" in key:
-                            if "xyz" in key: data_log['gc_leaf_xyz'] += value.item() / 4.
-                            elif "angular" in key: data_log['gc_leaf_angular_distance'] += value.item() / 4.
-                    else:
-                        data_log[f"segments/{key}"] = value.item()
+                        if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+                            data_log[f"segm_leaf_init/{key}"] = value.mean().item()
+                        else:
+                            data_log[f"segm_init/{key}"] = value.mean().item()
+                    elif "uc" in key or "gc" in key:
+                        if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+                            data_log[f"segm_leaf/{key}"] = value.mean().item()
+                            if "uc" in key: 
+                                if "xyz" in key: data_log['uc-leaf-xyz'] += value.mean().item() / 4.
+                                elif "angular" in key: data_log['uc-leaf-angular'] += value.mean().item() / 4.
+                            elif "gc" in key:
+                                if "xyz" in key: data_log['gc-leaf-xyz'] += value.mean().item() / 4.
+                                elif "angular" in key: data_log['gc-leaf-angular'] += value.mean().item() / 4.
+                        else:
+                            data_log[f"segm/{key}"] = value.mean().item()
+                    
+                    if "gc" in key:
+                        part_index = XSensConstants.part_names.index(key[3:].split("-")[0])
+                        if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+                            vis_val = (value[goal_visible_mask[:, part_index] == 1]).mean().item()
+                            not_vis_val = (value[goal_visible_mask[:, part_index] == 0]).mean().item()
+                            if "xyz" in key: 
+                                data_log[f"gc-leaf-xyz-visible"] += vis_val / 4.
+                                data_log[f"gc-leaf-xyz-notVisible"] += not_vis_val / 4.
+                            elif "angular" in key: 
+                                data_log[f"gc-leaf-angular-visible"] += vis_val / 4.
+                                data_log[f"gc-leaf-angular-notVisible"] += not_vis_val / 4.
+                            data_log[f"segm_leaf_byVis/vis-{key}"] = vis_val
+                            data_log[f"segm_leaf_byVis/notVis-{key}"] = not_vis_val
+                        else:
+                            data_log[f"segm_byVis/vis-{key}"] = (value * goal_visible_mask[:, part_index]).mean().item()
+                            data_log[f"segm_byVis/notVis-{key}"] = (value * (1 - goal_visible_mask[:, part_index])).mean().item()
 
                 if use_wandb and i % wandb_log_freq == 0 and rank == 0:
                     wandb.log(data_log, commit=False)
@@ -396,6 +419,7 @@ def evaluate_nomad(
         
         naction = deltas.to(device, non_blocking=True).float()
         
+        goal_visible_mask = 1. - (goal_image_coords != -1).all(dim=2).to(torch.float32) # B, K, 2 -> B, K (K = # parts)
         goal_coordinates = None
         if config.get("goal_type", None) in ["2d", "2d5050"]:
             goal_coordinates = torch.stack(
@@ -409,9 +433,6 @@ def evaluate_nomad(
         else:
             # goal_pose = gt_actions_with_initial[:, 0]
             goal_pose = goal_pos[:, 0]
-            
-        batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
-        batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
 
         rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
 
@@ -499,21 +520,44 @@ def evaluate_nomad(
             _3dp_metrics = reduce_metrics(_3dp_metrics)
         
         data_log = {}
-        data_log["eval/uc_leaf_xyz"], data_log['eval/uc_leaf_angular_distance'] = 0, 0
-        data_log["eval/gc_leaf_xyz"], data_log['eval/gc_leaf_angular_distance'] = 0, 0
+        data_log["eval/uc-leaf-xyz"], data_log['eval/uc-leaf-angular'] = 0, 0
+        data_log["eval/gc-leaf-xyz"], data_log['eval/gc-leaf-angular'] = 0, 0
+        data_log['eval/gc-leaf-xyz-visible'], data_log['eval/gc-leaf-xyz-notVisible'] = 0, 0
+        data_log['eval/gc-leaf-angular-visible'], data_log['eval/gc-leaf-angular-notVisible'] = 0, 0
         for key, value in _3dp_metrics.items():
             if "init" in key:
-                data_log[f"eval_segments_init/{key}"] = value.item()
-            elif any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                data_log[f"eval_segments_leaf/{key}"] = value.item()
-                if "uc" in key: 
-                    if "xyz" in key: data_log['eval/uc_leaf_xyz'] += value.item() / 4.
-                    elif "angular" in key: data_log['eval/uc_leaf_angular_distance'] += value.item() / 4.
-                elif "gc" in key:
-                    if "xyz" in key: data_log['eval/gc_leaf_xyz'] += value.item() / 4.
-                    elif "angular" in key: data_log['eval/gc_leaf_angular_distance'] += value.item() / 4.
-            else:
-                data_log[f"eval_segments/{key}"] = value.item()
+                if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+                    data_log[f"eval_segm_leaf_init/{key}"] = value.mean().item()
+                else:
+                    data_log[f"eval_segm_init/{key}"] = value.mean().item()
+            elif "uc" in key or "gc" in key:
+                if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+                    data_log[f"eval_segm_leaf/{key}"] = value.mean().item()
+                    if "uc" in key: 
+                        if "xyz" in key: data_log['eval/uc-leaf-xyz'] += value.mean().item() / 4.
+                        elif "angular" in key: data_log['eval/uc-leaf-angular'] += value.mean().item() / 4.
+                    elif "gc" in key:
+                        if "xyz" in key: data_log['eval/gc-leaf-xyz'] += value.mean().item() / 4.
+                        elif "angular" in key: data_log['eval/gc-leaf-angular'] += value.mean().item() / 4.
+                else:
+                    data_log[f"eval_segm/{key}"] = value.mean().item()
+            
+            if "gc" in key:
+                part_index = XSensConstants.part_names.index(key[3:].split("-")[0])
+                if any(part in key for part in ["Pelvis", "Head", "Hand"]):
+                    vis_val = (value[goal_visible_mask[:, part_index] == 1]).mean().item()
+                    not_vis_val = (value[goal_visible_mask[:, part_index] == 0]).mean().item()
+                    if "xyz" in key: 
+                        data_log[f"eval/gc-leaf-xyz-visible"] += vis_val / 4.
+                        data_log[f"eval/gc-leaf-xyz-notVisible"] += not_vis_val / 4.
+                    elif "angular" in key: 
+                        data_log[f"eval/gc-leaf-angular-visible"] += vis_val / 4.
+                        data_log[f"eval/gc-leaf-angular-notVisible"] += not_vis_val / 4.
+                    data_log[f"eval_segm_leaf_byVis/vis-{key}"] = vis_val
+                    data_log[f"eval_segm_leaf_byVis/notVis-{key}"] = not_vis_val
+                else:
+                    data_log[f"eval_segm_byVis/vis-{key}"] = (value * goal_visible_mask[:, part_index]).mean().item()
+                    data_log[f"eval_segm_byVis/notVis-{key}"] = (value * (1 - goal_visible_mask[:, part_index])).mean().item()
         all_data_logs.append(data_log)
 
         if i == 0 and rank == 0:
