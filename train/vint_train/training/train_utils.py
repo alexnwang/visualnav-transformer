@@ -213,6 +213,10 @@ def train_nomad(
         # Optimize
         optimizer.zero_grad()
         loss.backward()
+        
+        if config.get("clipping", False):
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.get("max_norm", 1.0))
+        
         optimizer.step()
         lr_scheduler.step()
 

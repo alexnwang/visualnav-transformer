@@ -250,16 +250,16 @@ def main(rank, world_size, config):
         vision_encoder = get_vision_encoder()
         model = RegressionModel(vision_encoder, output_dim=config["input_dims"]) # comes from the diffusion model params
 
-    if config["clipping"]:
-        print("Clipping gradients to", config["max_norm"])
-        for p in model.parameters():
-            if not p.requires_grad:
-                continue
-            p.register_hook(
-                lambda grad: torch.clamp(
-                    grad, -1 * config["max_norm"], config["max_norm"]
-                )
-            )
+    # if config["clipping"]:
+    #     print("Clipping gradients to", config["max_norm"])
+    #     for p in model.parameters():
+    #         if not p.requires_grad:
+    #             continue
+    #         p.register_hook(
+    #             lambda grad: torch.clamp(
+    #                 grad, -1 * config["max_norm"], config["max_norm"]
+    #             )
+    #         )
 
     # Move model to device first
     model = model.to(device)
