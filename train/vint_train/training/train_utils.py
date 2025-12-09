@@ -254,8 +254,8 @@ def train_nomad(
                 data_log = {}
                 data_log['uc-leaf-xyz'], data_log['uc-leaf-angular'] = 0, 0
                 data_log['gc-leaf-xyz'], data_log['gc-leaf-angular'] = 0, 0
-                data_log['gc-leaf-xyz-visible'], data_log['gc-leaf-xyz-notVisible'] = 0, 0
-                data_log['gc-leaf-angular-visible'], data_log['gc-leaf-angular-notVisible'] = 0, 0
+                data_log['gc-leaf-xyz-visible'], data_log['gc-leaf-xyz-notVisible'] = [], []
+                data_log['gc-leaf-angular-visible'], data_log['gc-leaf-angular-notVisible'] = [], []
                 for key, value in _3dp_metrics.items():
                     if "init" in key:
                         if any(part in key for part in ["Pelvis", "Head", "Hand"]):
@@ -276,20 +276,23 @@ def train_nomad(
                     
                     if "gc" in key:
                         part_index = XSensConstants.part_names.index(key[3:].split("-")[0])
+                        vis_val = (value[goal_visible_mask[:, part_index] == 1]).mean().item()
+                        not_vis_val = (value[goal_visible_mask[:, part_index] == 0]).mean().item()
                         if any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                            vis_val = (value[goal_visible_mask[:, part_index] == 1]).mean().item()
-                            not_vis_val = (value[goal_visible_mask[:, part_index] == 0]).mean().item()
                             if "xyz" in key: 
-                                data_log[f"gc-leaf-xyz-visible"] += vis_val / 4.
-                                data_log[f"gc-leaf-xyz-notVisible"] += not_vis_val / 4.
+                                data_log[f"gc-leaf-xyz-visible"].append(vis_val)
+                                data_log[f"gc-leaf-xyz-notVisible"].append(not_vis_val)
                             elif "angular" in key: 
-                                data_log[f"gc-leaf-angular-visible"] += vis_val / 4.
-                                data_log[f"gc-leaf-angular-notVisible"] += not_vis_val / 4.
+                                data_log[f"gc-leaf-angular-visible"].append(vis_val)
+                                data_log[f"gc-leaf-angular-notVisible"].append(not_vis_val)
                             data_log[f"segm_leaf_byVis/vis-{key}"] = vis_val
                             data_log[f"segm_leaf_byVis/notVis-{key}"] = not_vis_val
                         else:
-                            data_log[f"segm_byVis/vis-{key}"] = (value * goal_visible_mask[:, part_index]).mean().item()
-                            data_log[f"segm_byVis/notVis-{key}"] = (value * (1 - goal_visible_mask[:, part_index])).mean().item()
+                            data_log[f"segm_byVis/vis-{key}"] = vis_val
+                            data_log[f"segm_byVis/notVis-{key}"] = not_vis_val
+                
+                for key in ["gc-leaf-xyz-visible", "gc-leaf-xyz-notVisible", "gc-leaf-angular-visible", "gc-leaf-angular-notVisible"]:
+                    data_log[key] = np.nanmean(data_log[key])
 
                 if use_wandb and i % wandb_log_freq == 0 and rank == 0:
                     wandb.log(data_log, commit=False)
@@ -526,8 +529,8 @@ def evaluate_nomad(
         data_log = {}
         data_log["eval/uc-leaf-xyz"], data_log['eval/uc-leaf-angular'] = 0, 0
         data_log["eval/gc-leaf-xyz"], data_log['eval/gc-leaf-angular'] = 0, 0
-        data_log['eval/gc-leaf-xyz-visible'], data_log['eval/gc-leaf-xyz-notVisible'] = 0, 0
-        data_log['eval/gc-leaf-angular-visible'], data_log['eval/gc-leaf-angular-notVisible'] = 0, 0
+        data_log['eval/gc-leaf-xyz-visible'], data_log['eval/gc-leaf-xyz-notVisible'] = [], []
+        data_log['eval/gc-leaf-angular-visible'], data_log['eval/gc-leaf-angular-notVisible'] = [], []
         for key, value in _3dp_metrics.items():
             if "init" in key:
                 if any(part in key for part in ["Pelvis", "Head", "Hand"]):
@@ -548,22 +551,25 @@ def evaluate_nomad(
             
             if "gc" in key:
                 part_index = XSensConstants.part_names.index(key[3:].split("-")[0])
+                vis_val = (value[goal_visible_mask[:, part_index] == 1]).mean().item()
+                not_vis_val = (value[goal_visible_mask[:, part_index] == 0]).mean().item()
                 if any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                    vis_val = (value[goal_visible_mask[:, part_index] == 1]).mean().item()
-                    not_vis_val = (value[goal_visible_mask[:, part_index] == 0]).mean().item()
                     if "xyz" in key: 
-                        data_log[f"eval/gc-leaf-xyz-visible"] += vis_val / 4.
-                        data_log[f"eval/gc-leaf-xyz-notVisible"] += not_vis_val / 4.
+                        data_log[f"eval/gc-leaf-xyz-visible"].append(vis_val)
+                        data_log[f"eval/gc-leaf-xyz-notVisible"].append(not_vis_val)
                     elif "angular" in key: 
-                        data_log[f"eval/gc-leaf-angular-visible"] += vis_val / 4.
-                        data_log[f"eval/gc-leaf-angular-notVisible"] += not_vis_val / 4.
+                        data_log[f"eval/gc-leaf-angular-visible"].append(vis_val)
+                        data_log[f"eval/gc-leaf-angular-notVisible"].append(not_vis_val)
                     data_log[f"eval_segm_leaf_byVis/vis-{key}"] = vis_val
                     data_log[f"eval_segm_leaf_byVis/notVis-{key}"] = not_vis_val
                 else:
-                    data_log[f"eval_segm_byVis/vis-{key}"] = (value * goal_visible_mask[:, part_index]).mean().item()
-                    data_log[f"eval_segm_byVis/notVis-{key}"] = (value * (1 - goal_visible_mask[:, part_index])).mean().item()
+                    data_log[f"eval_segm_byVis/vis-{key}"] = vis_val
+                    data_log[f"eval_segm_byVis/notVis-{key}"] = not_vis_val
+                    
+        for key in ["eval/gc-leaf-xyz-visible", "eval/gc-leaf-xyz-notVisible", "eval/gc-leaf-angular-visible", "eval/gc-leaf-angular-notVisible"]:
+            data_log[key] = np.nanmean(data_log[key])
+    
         all_data_logs.append(data_log)
-
         if i == 0 and rank == 0:
             batch_viz_obs_images = TF.resize(obs_images[:, -1], VISUALIZATION_IMAGE_SIZE[::-1])
             batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
@@ -592,7 +598,7 @@ def evaluate_nomad(
             for key in keys:
                 vals = [d[key] for d in all_data_logs if key in d]
                 if vals:
-                    avg_data_log[key] = float(np.mean(vals))
+                    avg_data_log[key] = float(np.nanmean(vals))
 
         avg_rand_mask_loss = np.mean(rand_mask_loss_list) if rand_mask_loss_list else 0.0
         avg_no_mask_loss = np.mean(no_mask_loss_list) if no_mask_loss_list else 0.0
