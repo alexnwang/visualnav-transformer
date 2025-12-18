@@ -58,7 +58,7 @@ class XsensSkeleton(Skeleton):
     # Reference: https://github.com/dx118/dynaip/blob/ddfff5b88b77e124744bc74a792967cb8bad6735/utils/skeleton.py#L12
     """Skeleton defination and forward kinematics for Xsens."""
 
-    def __init__(self):
+    def __init__(self, offsets=None):
         """
         Initialize the skeleton, using segment lengths from Andy dataset,
         extracted from bvh files.
@@ -99,6 +99,11 @@ class XsensSkeleton(Skeleton):
                                         [ 4.6875e-05,  0.0000e+00, -4.6706e-01],
                                         [-1.3225e-04,  0.0000e+00, -4.1930e-01], # 21 LeftLowerLeg
                                         [ 1.6630e-01,  0.0000e+00, -1.0138e-01]]) # 22 LeftFoot
+        
+        
+        if offsets is not None:
+            assert offsets.shape == self.offsets.shape
+            self.offsets = offsets
         
         self.topology = XSensConstants.kintree_parents
         self.connections = []
