@@ -8,6 +8,8 @@ dataset*.pkl
 slurm_logs
 train/logs
 train/diffusion_policy
+data_jsons
+test_dir
 
 *.png
 *.jpg
