@@ -117,7 +117,7 @@ def main(rank, world_size, config):
     for dataset_name in config["datasets"]:
         data_config = config["datasets"][dataset_name]
         if "negative_goals" not in data_config:
-            data_config["negative_goals"] = True
+            data_config["negative_goals"] = False
         if "goals_per_obs" not in data_config:
             data_config["goals_per_obs"] = 1
         if "end_slack" not in data_config:

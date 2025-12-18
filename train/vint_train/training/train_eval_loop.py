@@ -153,15 +153,16 @@ def load_model(model, model_type, checkpoint: dict) -> None:
     """Load model from checkpoint."""
     if model_type == "nomad":
         state_dict = checkpoint
-        model.load_state_dict(state_dict, strict=False)
+        msg = model.load_state_dict(state_dict, strict=False)
     else:
         loaded_model = checkpoint["model"]
         try:
             state_dict = loaded_model.module.state_dict()
-            model.load_state_dict(state_dict, strict=False)
+            msg = model.load_state_dict(state_dict, strict=False)
         except AttributeError as e:
             state_dict = loaded_model.state_dict()
-            model.load_state_dict(state_dict, strict=False)
+            msg = model.load_state_dict(state_dict, strict=False)
+    return msg
 
 
 def load_ema_model(ema_model, state_dict: dict) -> None:

@@ -381,6 +381,19 @@ class ViNT_Nymeria_Dataset(Dataset):
         # compute goal pose incl initial pose, and xyz
         gt_actions_with_initial = get_action_smpl_torch(first_pose[None], deltas_torch[None], XSensConstants.upper_body_num_parts)[:, -1] # 1, 48
         
+        # xsens_skel = XsensSkeleton(offsets=curr_traj_data["xsens_offsets"])
+        # goal_xyz_in_pelvis0_frame = forward_kinematics_wrapper(gt_actions_with_initial, xsens_skel, return_euler=False) # 1, 15, 3
+        # gt_goal_xyz_in_world_frame = curr_traj_data["all_parts"][goal_time, :15, 0, 4:] # 1, 15, 3
+        # inital_pelvis_location = curr_traj_data["all_parts"][curr_time, 0, 0, 4:] # 1, 7
+        # print("destination error", (goal_xyz_in_pelvis0_frame-gt_goal_xyz_in_world_frame+ inital_pelvis_location[None]).mean())
+        # init_xyz_in_pelvis0_frame = forward_kinematics_wrapper(first_pose[None], xsens_skel, return_euler=False) # 1, 15, 3
+        # def_xsens_skel = XsensSkeleton()
+        # def_goal_xyz_in_world_frame = forward_kinematics_wrapper(gt_actions_with_initial, def_xsens_skel, return_euler=False) # 1, 15, 3
+        # print("default error", (def_goal_xyz_in_world_frame + inital_pelvis_location[None] - curr_traj_data["all_parts"][goal_time, :15, 0, 4:]).mean())
+        # print("initial error", (init_xyz_in_pelvis0_frame+inital_pelvis_location[None] - curr_traj_data["all_parts"][curr_time, :15, 0, 4:]).mean())
+        # def_init_xyz_in_world_frame = forward_kinematics_wrapper(first_pose[None], def_xsens_skel, return_euler=False) # 1, 15, 3
+        # print("default initial error", (def_init_xyz_in_world_frame + inital_pelvis_location[None] - curr_traj_data["all_parts"][curr_time, :15, 0, 4:]).mean())
+        
         if self.normalize:
             deltas_torch = self.normalize_data(deltas_torch, self.ACTION_STATS)
             # only deltas should be normalized as it is the output of the model.
@@ -422,6 +435,9 @@ class ViNT_Nymeria_Dataset(Dataset):
             "goal_image": goal_image.type(torch.float32),
             "goal_image_coords": torch.as_tensor(image_coords, dtype=torch.float32),
         }
+        
+        if "xsens_offsets" in curr_traj_data:
+            ret_dict["xsens_offsets"] = torch.as_tensor(curr_traj_data["xsens_offsets"], dtype=torch.float32)
         
         if self.goal_type == "point": # late fusion semi "cheat" model
             if False: #"xsens_offsets" in curr_traj_data:
