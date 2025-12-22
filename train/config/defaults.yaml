@@ -25,7 +25,6 @@ goal_encoding_size: 1024
 normalize: True
 
 # context
-context_type: temporal
 context_size: 5
 
 # tradeoff between action and distance prediction loss

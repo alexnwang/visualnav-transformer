@@ -107,9 +107,6 @@ def main(rank, world_size, config):
     train_dataset = []
     test_dataloaders = {}
 
-    if "context_type" not in config:
-        config["context_type"] = "temporal"
-
     if "clip_goals" not in config:
         config["clip_goals"] = False
 
@@ -143,7 +140,6 @@ def main(rank, world_size, config):
                     context_size=config["context_size"],
                     goal_type=config.get("goal_type", None),
                     preserve_pose_up_down=data_config.get("preserve_pose_up_down", False),
-                    context_type=config["context_type"],
                     end_slack=data_config["end_slack"],
                     goals_per_obs=data_config["goals_per_obs"],
                     normalize=config["normalize"],

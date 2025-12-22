@@ -45,7 +45,6 @@ class ViNT_Nymeria_Dataset(Dataset):
         context_size: int,
         goal_type: Optional[str] = None,
         preserve_pose_up_down: bool = False,
-        context_type: str = "temporal",
         end_slack: int = 0,
         goals_per_obs: int = 1,
         normalize: bool = True,
@@ -72,7 +71,6 @@ class ViNT_Nymeria_Dataset(Dataset):
             context_size (int): Number of previous observations to use as context
             goal_type (str): Type of the goal. Can be "2d" or "point" or "2d5050" or "draw"
             preserve_pose_up_down (bool): Whether to preserve the pose up down orientation
-            context_type (str): Whether to use temporal, randomized, or randomized temporal context
             end_slack (int): Number of timesteps to ignore at the end of the trajectory
             goals_per_obs (int): Number of goals to sample per observation
             normalize (bool): Whether to normalize the distances or actions
@@ -108,12 +106,6 @@ class ViNT_Nymeria_Dataset(Dataset):
         self.max_action_distance = max_action_distance
 
         self.context_size = context_size
-        assert context_type in {
-            "temporal",
-            "randomized",
-            "randomized_temporal",
-        }, "context_type must be one of temporal, randomized, randomized_temporal"
-        self.context_type = context_type
         self.end_slack = end_slack
         self.goals_per_obs = goals_per_obs
         self.normalize = normalize
@@ -278,7 +270,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         """
         index_to_data_path = os.path.join(
             self.data_split_folder,
-            f"dataset_dist_{self.min_dist_cat}_to_{self.max_dist_cat}_context_{self.context_type}_n{self.context_size}_slack_{self.end_slack}.pkl",
+            f"dataset_dist_{self.min_dist_cat}_to_{self.max_dist_cat}_contextn{self.context_size}_slack_{self.end_slack}.pkl",
         )
         try:
             # load the index_to_data if it already exists (to save time)
@@ -324,18 +316,15 @@ class ViNT_Nymeria_Dataset(Dataset):
 
         # Load images
         context = []
-        if self.context_type == "temporal":
-            # sample the last self.context_size times from interval [0, curr_time)
-            context_times = list(
-                range(
-                    curr_time + -self.context_size * self.waypoint_spacing,
-                    curr_time + 1,
-                    self.waypoint_spacing,
-                )
+        # sample the last self.context_size times from interval [0, curr_time)
+        context_times = list(
+            range(
+                curr_time + -self.context_size * self.waypoint_spacing,
+                curr_time + 1,
+                self.waypoint_spacing,
             )
-            context = [(f_curr, t) for t in context_times]
-        else:
-            raise ValueError(f"Invalid context type {self.context_type}")
+        )
+        context = [(f_curr, t) for t in context_times]
 
         obs_images = torch.stack([
             self._load_image(f, t) for f, t in context # these are C, H, W tensors
