@@ -35,6 +35,7 @@ dependencies:
   - imageio
   - accelerate
   - projectaria-tools
+  - dreamsim
 
 
 
