@@ -1,0 +1,37 @@
+run_name: nymeria_rel_concat_embedding_compile_beta095_ar_model_context_16_bs_16_smpl_lowebody_-64to_64_1_goal_emb_relative_xxl
+
+# training setup
+results_dir: /home/alexnwang/wm_fbc-ar_model/results
+use_wandb: True
+train: True
+batch_size: 4
+num_workers: 12
+model: CDiT-XXL/2
+lr: 8e-5
+beta2: 0.95
+compile: true
+smpl_pose: 1
+
+# normalization for the action space
+normalize: False
+grad_clip_val: 10.0
+context_size: 15
+
+# distance bounds for distance and action and distance predictions 
+distance:
+  min_dist_cat: -64
+  max_dist_cat: 64
+
+# action output params
+len_traj_pred: 64
+
+# dataset specific parameters
+image_size: 224
+datasets:
+  nymeria:
+    data_folder: /datasets/nymeria/current/nymeria_head_only_processed_4fps_smpl
+    train: data_splits/nymeria/train/
+    test: data_splits/nymeria/test/
+    action_stats:
+      min: [-2.5, -2.5, -2.5, -3.14159, -3.14159, -3.14159]
+      max: [1.5, 1.5, 1.5, 3.14159, 3.14159, 3.14159]
