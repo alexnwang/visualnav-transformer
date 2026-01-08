@@ -9,7 +9,7 @@ import numpy as np
 from torchvision import transforms
 from dreamsim import dreamsim
 from scipy.spatial.transform import Rotation as R
-
+from torch.utils.data import RandomSampler, DataLoader
 from diffusers.models import AutoencoderKL
 
 from peva.models import CDiT_models
@@ -61,26 +61,30 @@ def main(args):
     )
     
     dataset = get_nymeria_dataset(nomad_config, context_size=args.peva_context_size-1)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
     
     count = 0
-    for batch in dataset:
-        obs_images = batch["obs_images"][None] # 1, context_size, 3, H, W
-        goal_image = batch["goal_image"][None] # 1, 3, H, W
-        context_poses = batch["context_poses"][None] # 1, context_size, 48
+    for idx, batch in enumerate(dataloader):
+        obs_images = batch["obs_images"] # 1, context_size, 3, H, W
+        goal_image = batch["goal_image"] # 1, 3, H, W
+        context_poses = batch["context_poses"] # 1, context_size, 48
 
-        deltas = batch["deltas"][None] # 1, horizon, action_dim
-        first_pose = batch["first_pose"][None] # 1, 1, 48
-        xsens_offsets = batch["xsens_offsets"] # 15, 3
-        goal_obs = batch["goal_obs"][None] # 1, 3, H, W
-        goal_image_coords = batch["goal_image_coords"][None] # 1, 23, 2
+        deltas = batch["deltas"] # 1, horizon, action_dim
+        first_pose = batch["first_pose"] # 1, 1, 48
+        xsens_offsets = batch["xsens_offsets"][0] # 15, 3
+        goal_obs = batch["goal_obs"] # 1, 3, H, W
+        goal_image_coords = batch["goal_image_coords"] # 1, 23, 2
         
         if not args.keep_nonvisible_goal:
             visible = False
+            find_count = 0
             for part in ["Pelvis", "Head", "R_Hand", "L_Hand"]:
                 index = XSensConstants.part_names.index(part)
                 if all(goal_image_coords[0, index] != -1):
-                    visible = True
-                    break
+                    find_count += 1
+                    if find_count >=3:
+                        visible = True
+                        break
             if not visible:
                 continue
         obs_0 = {"images": obs_images,

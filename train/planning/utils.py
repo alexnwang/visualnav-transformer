@@ -210,7 +210,6 @@ def load_policy(nomad_config_file, nomad_checkpoint, device='cpu'):
     
     model = model.to(device)
     model = model.eval()
-    noise_scheduler = noise_scheduler
 
     loaded_state_dict = torch.load(nomad_checkpoint, map_location=device) 
     for key in list(loaded_state_dict.keys()):

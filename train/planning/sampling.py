@@ -9,7 +9,8 @@ from torchvision import transforms
 from torchvision.utils import save_image
 import wandb
 import yaml
-
+import numpy as np
+import math
 from peva.diffusion import create_diffusion
 from peva.models import CDiT_models
 from planning.cem import CEMPlanner
@@ -21,6 +22,7 @@ from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
 from vint_train.training.nymeria_training_utils import (
     unnormalize_data_smpl_pose_gaussian,
 )
+from planning.utils import _compute_pose_and_loss
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch, normalize_data_smpl_pose
 from planning.utils import draw_waypoints
 
@@ -31,7 +33,9 @@ def waypoint_sample(policy_model, policy_diffusion,
                     image_size, 
                     policy_context_size, peva_context_size, peva_latent_size,
                     device,
-                    skip_last_peva=False):
+                    skip_last_peva=False,
+                    gt_deltas=None,
+                    first_pose=None):
     imagenet_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     wm_norm = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     
@@ -43,6 +47,7 @@ def waypoint_sample(policy_model, policy_diffusion,
     wm_obs = wm_norm(curr_obs.flatten(0, 1)).unflatten(0, (B, -1))
     for w in range(W):
         policy_obs = imagenet_norm(curr_obs[:, -policy_context_size:].flatten(0, 1)).unflatten(0, (B, policy_context_size))
+        # goal_obs = imagenet_norm(curr_obs[:, -1])
         goal_obs = imagenet_norm(draw_waypoints(curr_obs[:, -1], waypoints_pixels[:, w]))
         # goal_obs = imagenet_norm(goal_obs)
         
@@ -51,6 +56,34 @@ def waypoint_sample(policy_model, policy_diffusion,
                     context_poses[:, :policy_context_size], 
                     policy_pred_horizon, policy_action_dim, device) # B, 8, 48
         delta_accum[:, w * policy_pred_horizon:(w+1) * policy_pred_horizon] = deltas
+    
+        # pred_actions = get_action_smpl_torch(first_pose, delta_accum, XSensConstants.upper_body_num_parts) # B, T, 48
+        # gt_actions = get_action_smpl_torch(first_pose, gt_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
+        # eval_metrics = _compute_pose_and_loss(pred_actions[:, -1], gt_actions[:, -1], XsensSkeleton())
+        # res_matrix = torch.zeros(B, 5, 2, device=curr_obs.device)
+        # for k, v in eval_metrics.items():
+        #     if "Pelvis-xyz" in k:
+        #         res_matrix[:, 0, 0] = v
+        #     elif "Head-xyz" in k:
+        #         res_matrix[:, 1, 0] = v
+        #     elif "R_Hand-xyz" in k:
+        #         res_matrix[:, 2, 0] = v
+        #     elif "L_Hand-xyz" in k:
+        #         res_matrix[:, 3, 0] = v
+        #     if any(x in k for x in ["Head-xyz", "Pelvis-xyz", "R_Hand-xyz", "L_Hand-xyz"]):
+        #         res_matrix[:, 4, 0] += v / 4
+        # start_metrics = _compute_pose_and_loss(first_pose[:, -1], gt_actions[:, -1], XsensSkeleton())
+        # for k, v in start_metrics.items():
+        #     if "Pelvis-xyz" in k:
+        #         res_matrix[:, 0, 1] = v
+        #     elif "Head-xyz" in k:
+        #         res_matrix[:, 1, 1] = v
+        #     elif "R_Hand-xyz" in k:
+        #         res_matrix[:, 2, 1] = v
+        #     elif "L_Hand-xyz" in k:
+        #         res_matrix[:, 3, 1] = v
+        #     if any(x in k for x in ["Head-xyz", "Pelvis-xyz", "R_Hand-xyz", "L_Hand-xyz"]):
+        #         res_matrix[:, 4, 1] += v / 4
     
         if skip_last_peva and w == W-1:
             continue 
@@ -82,22 +115,29 @@ def waypoint_sample(policy_model, policy_diffusion,
             x_pred = x_pred[:, None] # B, 1, 3, H, W
             generated_frames[:, (w * policy_pred_horizon) + t] = x_pred[:, 0]
             curr_obs = torch.cat([curr_obs[:, 1:], x_pred], dim=1)
+            
+    # import os
+    # os.makedirs("logs/waypoint_cem_goal_vis", exist_ok=True)
+    # img_width = 8
+    # for b in range(B):
+    #     print("="*10)
+    #     print(b)
+    #     print("Pelvis", "initial", res_matrix[b, 0, 1].item(), "final", res_matrix[b, 0, 0].item())
+    #     print("Head", "initial", res_matrix[b, 1, 1].item(), "final", res_matrix[b, 1, 0].item())
+    #     print("R_Hand", "initial", res_matrix[b, 2, 1].item(), "final", res_matrix[b, 2, 0].item())
+    #     print("L_Hand", "initial", res_matrix[b, 3, 1].item(), "final", res_matrix[b, 3, 0].item())
+    #     print("All", "initial", res_matrix[b, 4, 1].item(), "final", res_matrix[b, 4, 0].item())
+    #     po = policy_obs[b]  # (policy_context_size, 3, H, W)
+    #     go = goal_obs[b][None]    # (1, 3, H, W)
+    #     blanks = torch.zeros_like(go).repeat(8-1-policy_context_size, 1, 1, 1)    # (8-1-policy_context_size, 3, H, W)
+    #     gen = generated_frames[b, :] # (W * policy_pred_horizon, 3, H, W)
+    #     imgs_to_save = torch.cat([po, go, blanks], dim=0)  # (policy_context_size + 1, 3, H, W)
+    #     # undo imagenet normalization
+    #     imgs_to_save = imgs_to_save * torch.tensor([0.229, 0.224, 0.225])[None, :, None, None].to(device) + torch.tensor([0.485, 0.456, 0.406])[None, :, None, None].to(device)
+    #     gen = gen * 0.5 + 0.5
+    #     imgs_to_save = torch.cat([imgs_to_save, gen], dim=0)  # (policy_context_size + 1 + W * policy_pred_horizon, 3, H, W)
+    #     save_image(imgs_to_save, f"logs/waypoint_cem_goal_vis/dist{math.floor(100*res_matrix[b, 4, 0].item())}-policy_goal_vis_row_w{w}_b{b}.png", nrow=img_width)
         
-        import os
-        os.makedirs("logs/waypoint_cem_goal_vis", exist_ok=True)
-        img_width = 8
-        for b in range(B):
-            po = policy_obs[b]  # (policy_context_size, 3, H, W)
-            go = goal_obs[b][None]    # (1, 3, H, W)
-            blanks = torch.zeros_like(go).repeat(8-1-policy_context_size, 1, 1, 1)    # (8-1-policy_context_size, 3, H, W)
-            gen = generated_frames[b, :] # (W * policy_pred_horizon, 3, H, W)
-            imgs_to_save = torch.cat([po, go, blanks], dim=0)  # (policy_context_size + 1, 3, H, W)
-            # undo imagenet normalization
-            imgs_to_save = imgs_to_save * torch.tensor([0.229, 0.224, 0.225])[None, :, None, None].to(device) + torch.tensor([0.485, 0.456, 0.406])[None, :, None, None].to(device)
-            gen = gen * 0.5 + 0.5
-            imgs_to_save = torch.cat([imgs_to_save, gen], dim=0)  # (policy_context_size + 1 + W * policy_pred_horizon, 3, H, W)
-            save_image(imgs_to_save, f"logs/waypoint_cem_goal_vis/policy_goal_vis_row_w{w}_b{b}.png", nrow=img_width)
-        exit()
     return generated_frames, delta_accum
 
 @torch.no_grad()
