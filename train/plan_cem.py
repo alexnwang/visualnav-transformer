@@ -23,7 +23,7 @@ from planning.wrappers import Evaluator, ObjectiveDreamSIM, Preprocessor, Waypoi
 from torchvision.utils import save_image
 
 def main(args):
-    run_name = f"wapoint_cem-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-e{args.eval_every}"
+    run_name = f"wapoint_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-e{args.eval_every}"
     if args.no_wandb:
         wandb_run = None
     else:
@@ -45,7 +45,7 @@ def main(args):
     objective_fn = ObjectiveDreamSIM(device="cuda")
     preprocessor = Preprocessor()
     cem_planner = CEMPlanner(
-        horizon=1,
+        horizon=args.horizon,
         topk=args.topk,
         num_samples=args.num_samples,
         var_scale=args.var_scale,
@@ -109,6 +109,7 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--var_scale", type=float, default=0.5, help="Variance scale")
     parser.add_argument("-o", "--opt_steps", type=int, default=8, help="Optimization steps")
     parser.add_argument("-e", "--eval_every", type=int, default=1, help="Evaluation frequency")
+    parser.add_argument("-h", "--horizon", type=int, default=1, help="Time horizon")
     
     parser.add_argument("--keep_nonvisible_goal", action="store_true", help="Keep non-visible goal in the dataset")
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")
