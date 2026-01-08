@@ -11,7 +11,7 @@ class ConditionalUnet1D_NoMaD(ConditionalUnet1D):
         super().__init__(*args, **kwargs)
 
     def forward(self, sample, timestep, local_cond=None, global_cond=None, goal_pose=None):
-        assert (goal_pose is None) == (global_cond is None)
         if goal_pose is not None and self.use_goal_pose:
+            assert global_cond is not None
             global_cond = torch.cat([global_cond, goal_pose], dim=-1)
         return super().forward(sample, timestep, local_cond, global_cond)

@@ -422,6 +422,8 @@ class ViNT_Nymeria_Dataset(Dataset):
             "gt_actions_with_initial": torch.as_tensor(gt_actions_with_initial, dtype=torch.float32),
             "obs_images": obs_images.type(torch.float32),
             "goal_image": goal_image.type(torch.float32),
+            "goal_obs": goal_image.type(torch.float32), # always the observation at goal time, goal_image can vary with goal_type
+            "goal_obs_transformed": goal_image_transformed.type(torch.float32),
             "goal_image_coords": torch.as_tensor(image_coords, dtype=torch.float32),
         }
         

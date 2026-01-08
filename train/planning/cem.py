@@ -96,7 +96,6 @@ class CEMPlanner(BasePlanner):
             self.preprocessor.transform_obs(obs_g), self.device
         )
         z_obs_g = self.wm.encode_obs(trans_obs_g)
-
         mu, sigma = self.init_mu_sigma(obs_0, actions)
         mu, sigma = mu.to(self.device), sigma.to(self.device)
         n_evals = mu.shape[0]
@@ -140,18 +139,18 @@ class CEMPlanner(BasePlanner):
 
             if self.wandb_run is not None:
                 self.wandb_run.log(
-                    {f"{self.logging_prefix}/loss": np.mean(losses), "step": i + 1}
+                    {f"loss": np.mean(losses), "step": i + 1}
                 )
             if self.evaluator is not None and i % self.eval_every == 0:
                 # logs, successes, _, _ = self.evaluator.eval_actions(
                 #     mu, filename=f"{self.logging_prefix}_output_{i+1}"
                 # )
-                logs = self.evaluator.eval_actions(mu, z_obs_g)
-                logs = {f"{self.logging_prefix}/{k}": v for k, v in logs.items()}
+                logs = self.evaluator.eval_actions(mu, trans_obs_0, z_obs_g)
+                logs = {f"eval/{k}": v for k, v in logs.items()}
                 logs.update({"step": i + 1})
                 if self.wandb_run is not None:
                     self.wandb_run.log(logs)
-            #     self.dump_logs(logs)
+                # self.dump_logs(logs)
             #     if np.all(successes):
             #         break  # terminate planning if all success
 

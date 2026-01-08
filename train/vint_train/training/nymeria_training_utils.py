@@ -17,12 +17,13 @@ from vint_train.visualizing.nymeria_utils import plot_cond_goal_gt_pred, save_gi
 
 def normalize_data_smpl_pose(data, stats):
     if len(data.shape) > 2:
-        ndata = data.clone().view(-1, data.shape[-1])
+        ndata = data.clone().view(-1, data.shape[-1]) # B*T, 48
     else:
         ndata = data.clone()
+    # ndata = data.clone()
     min = stats['min'][:, :3] # only translation
     max = stats['max'][:, :3] # only translation
-    ndata[:, :3] = (data[:, :3] - min) / (max - min)
+    ndata[:, :3] = (ndata[:, :3] - min) / (max - min)
     # normalize to [-1, 1]
     ndata[:, :3] = ndata[:, :3] * 2 - 1
     
@@ -63,6 +64,7 @@ def unnormalize_data_smpl_pose_gaussian(ndata, stats=None):
         stats = GAUSS_STATS
     
     if stats is None:
+        print("Warning, unormalize_data_smpl_pose_gaussian called with no stats")
         return ndata
     
     ndata = ndata.clone()
