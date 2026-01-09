@@ -1,11 +1,14 @@
+from pprint import pprint
 import torch
 import copy
 from torchvision import transforms
 from dreamsim import dreamsim
+from torchvision.utils import np
 from vint_train.data.misc import XSensConstants, XsensSkeleton
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch
-from planning.utils import _compute_pose_and_loss
+from planning.utils import _compute_pose_and_loss, _compute_part_distance_matrices
 from planning.sampling import waypoint_sample
+import matplotlib.pyplot as plt
 
 class Preprocessor:
     def __init__(self, transform=torch.nn.Identity()):
@@ -50,13 +53,17 @@ class WaypointWM(torch.nn.Module):
     def encode_obs(self, obs):
         return copy.deepcopy(obs)
     
-    def rollout(self, obs_0, act):
+    def rollout(self, state_0, act):
         device = act.device
-        curr_obs = obs_0['images'] # B, peva_context_size, 3, H, W
-        goal_obs = obs_0['goal_image'] # B, 3, H, W
-        context_poses = obs_0['context_poses'] # B, peva_context_size, 48
+        curr_obs = state_0['images'] # B, peva_context_size, 3, H, W
+        goal_obs = state_0['goal_image'] # B, 3, H, W
+        context_poses = state_0['context_poses'] # B, peva_context_size, 48
         
-        generated_frames, delta_accum = waypoint_sample(self.policy_model, self.policy_diffusion,
+        (
+            generated_frames, # B, W, policy_pred_horizon, 3, H, W
+            policy_sampled_deltas, # B, W, policy_pred_horizon, policy_action_dim
+            waypoint_annotated_goals # B, W, 3, H, W
+        ) = waypoint_sample(self.policy_model, self.policy_diffusion,
                     self.peva_model, self.peva_diffusion, self.peva_vae, self.peva_stats,
                     act, context_poses, curr_obs, goal_obs,
                     self.policy_pred_horizon, self.policy_action_dim,
@@ -65,24 +72,36 @@ class WaypointWM(torch.nn.Module):
                     device,
                     skip_last_peva=self.skip_last_peva)
         
-        # all_frames = torch.cat([obs_0['images'], generated_frames], dim=1)
-        # all_frames = all_frames * 0.5 + 0.5
-        # for i in range(all_frames.shape[0]):
-        #     image = torch.cat([img for img in all_frames[i]], dim=-1)
-        #     save_image(image, f"rollout_{i}.png")
-        return {"images": generated_frames.to(torch.float32), "deltas": delta_accum.to(torch.float32)}, None
+        return {"generated_obs": generated_frames.flatten(1,2).to(torch.float32),
+                "deltas": policy_sampled_deltas.flatten(1,2).to(torch.float32),
+                "goal_images": waypoint_annotated_goals.to(torch.float32)}
 
 class ObjectiveDreamSIM:
     def __init__(self, device):
         self.device = device
         self.model, self.preprocess = dreamsim(pretrained=True, device=device, cache_dir="/scratch/anw2067/cache")
+        self.save_dir = None
+
+    def set_save_dir(self, save_dir):
+        self.save_dir = save_dir
+    
+    def __call__(self, cem_step, rollout_state, state_0, goal_state, topk=0):
+        first_pose = goal_state["first_pose"]
+        deltas = rollout_state["deltas"]
+        gt_deltas = goal_state["deltas"]
+        xsens_offsets = goal_state["xsens_offsets"][0]
+        skel = XsensSkeleton()
         
-    def __call__(self, rollout_state, goal_state):
+        pred_actions = get_action_smpl_torch(first_pose, deltas, XSensConstants.upper_body_num_parts) # B, T, 48
+        gt_actions = get_action_smpl_torch(first_pose, gt_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
+        (xyz_dist_matrix, ang_dist_matrix,
+         leaf_xyz, leaf_ang) = _compute_part_distance_matrices(pred_actions[:, -1], gt_actions[:, -1], skel)
+        _, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
         
-        pred_image = rollout_state["images"]
+        pred_image = rollout_state["generated_obs"]
         goal_image = goal_state["images"]
         B = pred_image.shape[0]
-        res = []
+        res = torch.empty(B, device=self.device)
         for i in range(B):
             pred_image_pil = transforms.ToPILImage()(pred_image[i, -1])
             goal_image_pil = transforms.ToPILImage()(goal_image[i])
@@ -91,21 +110,46 @@ class ObjectiveDreamSIM:
             goal_state = self.preprocess(goal_image_pil).to(self.device)
 
             sim = self.model(rollout_state, goal_state)
-            res.append(sim)
-        res = torch.cat(res, dim=0) # B
+            res[i] = sim
+        if self.save_dir is not None:
+            self.save_plot(res.detach().cpu().numpy(),
+                           leaf_xyz.detach().cpu().numpy(),
+                           leaf_xyz_init[0].detach().cpu().numpy(),
+                           "DreamSIM", "Leaf XYZ Distance", 
+                           f"{self.save_dir}/step{cem_step}-dreamSIM_xyz.png", k=topk)
+            self.save_plot(res.detach().cpu().numpy(),
+                           leaf_ang.detach().cpu().numpy(),
+                           leaf_ang_init[0].detach().cpu().numpy(),
+                           "DreamSIM", "Leaf Angular Distance", 
+                           f"{self.save_dir}/step{cem_step}-dreamSIM_ang.png", k=topk)
         print(f"ObjectiveFn: {res.mean().item()}")
         return res
     
-# def ObjectiveImageProjection: 
-#     def __init__(self, device):
-#         self.device = device
+    def save_plot(self, x, y, line_y, x_label, y_label, filename, k=0):
+        plt.figure()
+        if k > 0:
+            argsort = np.argsort(x)
+            plt.scatter(x[argsort[:k]], y[argsort[:k]], color='b')
+            plt.scatter(x[argsort[k:]], y[argsort[k:]], color='grey')
+        else:
+            plt.scatter(x, y)
+        plt.axhline(line_y, color='r', linestyle='--')
+        plt.xlabel(x_label)
+        plt.ylabel(y_label)
+        plt.savefig(filename.format(k=k))
+        plt.close()
+    
 
 class Evaluator(WaypointWM):
-    def __init__(self, *args,
+    def __init__(self,
+                 *args,
+                 num_eval_samples=1,
                  skip_last_peva=True,
                  **kwargs):
         kwargs['skip_last_peva'] = skip_last_peva
         super().__init__(*args, **kwargs)
+        
+        self.num_eval_samples = num_eval_samples
         
         if not self.skip_last_peva:
             print("WARNING: Evaluator is not skipping last PEVA rollout")
@@ -115,56 +159,69 @@ class Evaluator(WaypointWM):
         actions_mu: B, T, action_dim
         gt_dict: dict of gt_actions, skel
         """
-        waypoints = actions_mu 
+        B = actions_mu.shape[0]
+        
+        waypoints = actions_mu # B, W, 2
+        context_poses = state_0['context_poses'] # B, peva_context_size, 48
         curr_obs = state_0['images'] # B, peva_context_size, 3, H, W
         goal_obs = state_0['goal_image'] # B, 3, H, W
-        context_poses = state_0['context_poses'] # B, peva_context_size, 48
-        goal_image_coords = state_g["goal_image_coords"] # B, 23, 2
         device = curr_obs.device
-        
-        _, pred_actions = waypoint_sample(self.policy_model, self.policy_diffusion,
-                    self.peva_model, self.peva_diffusion, self.peva_vae, self.peva_stats,
-                    waypoints, context_poses, curr_obs, goal_obs,
-                    self.policy_pred_horizon, self.policy_action_dim,
-                    self.image_size, 
-                    self.policy_context_size, self.peva_context_size, self.latent_size,
-                    device,
-                    skip_last_peva=self.skip_last_peva)
-        
+
         deltas_gt = state_g["deltas"]
         first_pose = state_g["first_pose"] # B, 1, 48
-        xsens_offsets = state_g["xsens_offsets"]
-        skel = XsensSkeleton(xsens_offsets)
+        goal_image_coords = state_g['goal_image_coords'] # B, W, 2
+        xsens_offsets = state_g["xsens_offsets"][0]
+        skel = XsensSkeleton()
+        
+        if self.num_eval_samples > 1:
+            waypoints = waypoints[:, None].repeat(1, self.num_eval_samples, 1, 1).flatten(0, 1)
+            context_poses = context_poses[:, None].repeat(1, self.num_eval_samples, 1, 1).flatten(0, 1)
+            curr_obs = curr_obs[:, None].repeat(1, self.num_eval_samples, 1, 1, 1, 1).flatten(0, 1)
+            goal_obs = goal_obs[:, None].repeat(1, self.num_eval_samples, 1, 1, 1).flatten(0, 1)
+            first_pose = first_pose[:, None].repeat(1, self.num_eval_samples, 1, 1).flatten(0, 1)
+            deltas_gt = deltas_gt[:, None].repeat(1, self.num_eval_samples, 1, 1).flatten(0, 1)
+            goal_image_coords = goal_image_coords[:, None].repeat(1, self.num_eval_samples, 1, 1).flatten(0, 1)
+        
+        (
+            generated_frames, # B, W, policy_pred_horizon, 3, H, W
+            policy_sampled_deltas, # B, W, policy_pred_horizon, policy_action_dim
+            waypoint_annotated_goals # B, W, 3, H, W
+        ) = waypoint_sample(
+            self.policy_model, self.policy_diffusion,
+            self.peva_model, self.peva_diffusion, self.peva_vae, self.peva_stats,
+            waypoints, context_poses, curr_obs, goal_obs,
+            self.policy_pred_horizon, self.policy_action_dim,
+            self.image_size, 
+            self.policy_context_size, self.peva_context_size, self.latent_size,
+            device,
+            skip_last_peva=self.skip_last_peva
+        )
+        
+        pred_actions = policy_sampled_deltas.flatten(1,2)
         
         pred_actions = get_action_smpl_torch(first_pose, pred_actions, XSensConstants.upper_body_num_parts) # B, T, 48
         gt_actions = get_action_smpl_torch(first_pose, deltas_gt, XSensConstants.upper_body_num_parts) # B, T, 48
-        eval_metrics = _compute_pose_and_loss(pred_actions[:, -1], gt_actions[:, -1], skel)
         
-        start_distances = _compute_pose_and_loss(first_pose[:, -1], gt_actions[:, -1], skel)
-        leaf_start_distances = {k: v for k, v in start_distances.items() if any(x in k.lower() for x in ["head", "hand", "pelvis"])}
-        leaf_start_avg_xyz_distance = sum([v.mean().item() for k, v in leaf_start_distances.items() if "xyz" in k.lower()]) / len(leaf_start_distances)
-        leaf_start_avg_angular_distance = sum([v.mean().item() for k, v in leaf_start_distances.items() if "angular" in k.lower()]) / len(leaf_start_distances)
-        print(f"start-leaf-xyz_distance: {leaf_start_avg_xyz_distance}")
-        print(f"start-leaf-angular_distance: {leaf_start_avg_angular_distance}")
+        (xyz_dist_matrix, ang_dist_matrix, # B, num_parts
+         leaf_xyz, leaf_ang) = _compute_part_distance_matrices(pred_actions[:, -1], gt_actions[:, -1], skel)
+        _, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
         
-        res = {}
-        for k, v in eval_metrics.items():
-            part_name = k.split("-")[0]
-            part_idx = XSensConstants.part_names.index(part_name)
-            if any(x in k.lower() for x in ["head", "hand" "pelvis"]):
-                leaf_key = "leaf-" + k.split("-")[1]
-                if leaf_key not in res: res[leaf_key] = []
-                res[leaf_key].append(v)
-                
-                if all(goal_image_coords[0, part_idx] != -1):
-                    visible_key = "visible_leaf-" + k.split("-")[1]
-                    if visible_key not in res: res[visible_key] = []
-                    res[visible_key].append(v)
-        for k, v in res.items():
-            res[k] = torch.cat(v, dim=0).mean().item()
-            print(f"{k}: {res[k]}")
-        # for k, v in eval_metrics.items():
-        #     res[k] = v.mean().item()
-        res["start_leaf-xyz_distance"] = leaf_start_avg_xyz_distance
-        res["start_leaf-angular_distance"] = leaf_start_avg_angular_distance
+        leaf_indexer = torch.tensor([x in ["Pelvis", "Head", "R_Hand", "L_Hand"] for x in XSensConstants.part_names[:XSensConstants.upper_body_num_parts]], device=device)[None] # 1, num_parts
+        visible_indexer = (goal_image_coords != -1).all(dim=-1)[:, :XSensConstants.upper_body_num_parts] # B, num_parts
+        indexer = torch.logical_and(leaf_indexer, visible_indexer) # B, num_parts
+        visible_leaf_xyz_distance = torch.where(indexer, xyz_dist_matrix, torch.nan).nanmean(dim=-1) # B
+        visible_leaf_angular_distance = torch.where(indexer, ang_dist_matrix, torch.nan).nanmean(dim=-1) # B
+        res = {
+            "leaf-xyz_distance": leaf_xyz.mean().item(),
+            "leaf-angular_distance": leaf_ang.mean().item(),
+            "min-leaf-xyz_distance": leaf_xyz.min().item(),
+            "min-leaf-angular_distance": leaf_ang.min().item(),
+            "start_leaf-xyz_distance": leaf_xyz_init.mean().item(),
+            "start_leaf-angular_distance": leaf_ang_init.mean().item(),
+            "visible_leaf-xyz_distance": visible_leaf_xyz_distance.mean().item(),
+            "visible_leaf-angular_distance": visible_leaf_angular_distance.mean().item(),
+            "min-visible_leaf-xyz_distance": visible_leaf_xyz_distance.min().item(),
+            "min-visible_leaf-angular_distance": visible_leaf_angular_distance.min().item(),
+        }
+        pprint(res)
         return res

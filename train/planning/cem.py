@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 from einops import rearrange, repeat
@@ -25,7 +26,7 @@ class CEMPlanner(BasePlanner):
         evaluator,
         wandb_run,
         logging_prefix="plan_0",
-        log_filename="logs.json",
+        log_dir="logs/cem",
         **kwargs,
     ):
         """
@@ -43,6 +44,7 @@ class CEMPlanner(BasePlanner):
             evaluator (Evaluator): the evaluator for mu after eval_every steps
             wandb_run (wandb.Run): the wandb run
             logging_prefix (str): the prefix of the logging
+            log_dir (str): the directory of the logs
             log_filename (str): the filename of the logs
         """
         super().__init__(
@@ -52,8 +54,9 @@ class CEMPlanner(BasePlanner):
             preprocessor,
             evaluator,
             wandb_run,
-            log_filename,
+            log_filename="unused",
         )
+        self.log_dir = log_dir
         self.horizon = horizon
         self.topk = topk
         self.num_samples = num_samples
@@ -61,6 +64,9 @@ class CEMPlanner(BasePlanner):
         self.opt_steps = opt_steps
         self.eval_every = eval_every
         self.logging_prefix = logging_prefix
+        
+        os.makedirs(log_dir, exist_ok=True)
+        self.objective_fn.set_save_dir(log_dir)
 
     def init_mu_sigma(self, obs_0, actions=None):
         """
@@ -98,44 +104,41 @@ class CEMPlanner(BasePlanner):
         z_obs_g = self.wm.encode_obs(trans_obs_g)
         mu, sigma = self.init_mu_sigma(obs_0, actions)
         mu, sigma = mu.to(self.device), sigma.to(self.device)
-        n_evals = mu.shape[0]
-
+        assert actions.shape[0] == 1
+        # n_evals = mu.shape[0]
         for i in range(self.opt_steps):
             # optimize individual instances
             losses = []
-            for traj in range(n_evals):
-                cur_trans_obs_0 = {
-                    key: repeat(
-                        arr[traj].unsqueeze(0), "1 ... -> n ...", n=self.num_samples
-                    )
-                    for key, arr in trans_obs_0.items()
-                }
-                cur_z_obs_g = {
-                    key: repeat(
-                        arr[traj].unsqueeze(0), "1 ... -> n ...", n=self.num_samples
-                    )
-                    for key, arr in z_obs_g.items()
-                }
-                action = (
-                    torch.randn(self.num_samples, self.horizon, self.action_dim).to(
-                        self.device
-                    )
-                    * sigma[traj]
-                    + mu[traj]
+            curr_state_0 = {
+                key: repeat(
+                    arr, "1 ... -> n ...", n=self.num_samples
                 )
-                action[0] = mu[traj]  # optional: make the first one mu itself
-                with torch.no_grad():
-                    i_z_obses, i_zs = self.wm.rollout(
-                        obs_0=cur_trans_obs_0,
-                        act=action,
-                    )
+                for key, arr in trans_obs_0.items()
+            }
+            curr_latent_state_g = {
+                key: repeat(
+                    arr, "1 ... -> n ...", n=self.num_samples
+                )
+                for key, arr in z_obs_g.items()
+            }
+            action = (
+                torch.randn(self.num_samples, self.horizon, self.action_dim).to(
+                    self.device
+                )* sigma + mu
+            )
+            action[0] = mu  # optional: make the first one mu itself
+            with torch.no_grad():
+                i_state = self.wm.rollout(
+                    state_0=curr_state_0,
+                    act=action,
+                )
 
-                loss = self.objective_fn(i_z_obses, cur_z_obs_g)
-                topk_idx = torch.argsort(loss)[: self.topk]
-                topk_action = action[topk_idx]
-                losses.append(loss[topk_idx[0]].item())
-                mu[traj] = topk_action.mean(dim=0)
-                sigma[traj] = topk_action.std(dim=0)
+            loss = self.objective_fn(i, i_state, curr_state_0, curr_latent_state_g, self.topk)
+            topk_idx = torch.argsort(loss)[: self.topk]
+            topk_action = action[topk_idx]
+            losses.append(loss[topk_idx[0]].item())
+            mu = topk_action.mean(dim=0, keepdim=True)
+            sigma = topk_action.std(dim=0, keepdim=True)
 
             if self.wandb_run is not None:
                 self.wandb_run.log(
@@ -154,4 +157,4 @@ class CEMPlanner(BasePlanner):
             #     if np.all(successes):
             #         break  # terminate planning if all success
 
-        return mu, np.full(n_evals, np.inf)  # all actions are valid
+        return mu#, np.full(n_evals, np.inf)  # all actions are valid

@@ -42,48 +42,26 @@ def waypoint_sample(policy_model, policy_diffusion,
     waypoints_pixels = waypoints*image_size
     
     B, W = waypoints_pixels.shape[:2]
-    delta_accum = torch.zeros(B, W * policy_pred_horizon, policy_action_dim, device=device) # B, W*8, 48
-    generated_frames = torch.zeros(B, W * policy_pred_horizon, 3, image_size, image_size, device=device)
+    delta_accum = torch.zeros(B, W, policy_pred_horizon, policy_action_dim, device=device) # B, W*8, 48
+    goal_obs_accum = torch.zeros(B, W, 3, image_size, image_size, device=device)
+    if skip_last_peva:
+        gen_frames_accum = torch.zeros(B, (W-1), policy_pred_horizon, 3, image_size, image_size, device=device)
+    else:
+        gen_frames_accum = torch.zeros(B, W, policy_pred_horizon, 3, image_size, image_size, device=device)
+        
     wm_obs = wm_norm(curr_obs.flatten(0, 1)).unflatten(0, (B, -1))
     for w in range(W):
         policy_obs = imagenet_norm(curr_obs[:, -policy_context_size:].flatten(0, 1)).unflatten(0, (B, policy_context_size))
         # goal_obs = imagenet_norm(curr_obs[:, -1])
-        goal_obs = imagenet_norm(draw_waypoints(curr_obs[:, -1], waypoints_pixels[:, w]))
+        goal_obs_accum[:, w] = goal_obs = draw_waypoints(curr_obs[:, -1], waypoints_pixels[:, w])
+        goal_obs = imagenet_norm(goal_obs)
         # goal_obs = imagenet_norm(goal_obs)
         
         deltas = policy_sample(policy_model, policy_diffusion,
                     policy_obs, goal_obs,
                     context_poses[:, :policy_context_size], 
                     policy_pred_horizon, policy_action_dim, device) # B, 8, 48
-        delta_accum[:, w * policy_pred_horizon:(w+1) * policy_pred_horizon] = deltas
-    
-        # pred_actions = get_action_smpl_torch(first_pose, delta_accum, XSensConstants.upper_body_num_parts) # B, T, 48
-        # gt_actions = get_action_smpl_torch(first_pose, gt_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
-        # eval_metrics = _compute_pose_and_loss(pred_actions[:, -1], gt_actions[:, -1], XsensSkeleton())
-        # res_matrix = torch.zeros(B, 5, 2, device=curr_obs.device)
-        # for k, v in eval_metrics.items():
-        #     if "Pelvis-xyz" in k:
-        #         res_matrix[:, 0, 0] = v
-        #     elif "Head-xyz" in k:
-        #         res_matrix[:, 1, 0] = v
-        #     elif "R_Hand-xyz" in k:
-        #         res_matrix[:, 2, 0] = v
-        #     elif "L_Hand-xyz" in k:
-        #         res_matrix[:, 3, 0] = v
-        #     if any(x in k for x in ["Head-xyz", "Pelvis-xyz", "R_Hand-xyz", "L_Hand-xyz"]):
-        #         res_matrix[:, 4, 0] += v / 4
-        # start_metrics = _compute_pose_and_loss(first_pose[:, -1], gt_actions[:, -1], XsensSkeleton())
-        # for k, v in start_metrics.items():
-        #     if "Pelvis-xyz" in k:
-        #         res_matrix[:, 0, 1] = v
-        #     elif "Head-xyz" in k:
-        #         res_matrix[:, 1, 1] = v
-        #     elif "R_Hand-xyz" in k:
-        #         res_matrix[:, 2, 1] = v
-        #     elif "L_Hand-xyz" in k:
-        #         res_matrix[:, 3, 1] = v
-        #     if any(x in k for x in ["Head-xyz", "Pelvis-xyz", "R_Hand-xyz", "L_Hand-xyz"]):
-        #         res_matrix[:, 4, 1] += v / 4
+        delta_accum[:, w] = deltas
     
         if skip_last_peva and w == W-1:
             continue 
@@ -92,7 +70,7 @@ def waypoint_sample(policy_model, policy_diffusion,
         peva_normalized_deltas = normalize_data_smpl_pose(deltas, peva_stats)
         # peva_normalized_deltas = deltas
         # print("post_peva_norm", torch.abs(peva_normalized_deltas).sum(1).sum(1))
-        for t in range(deltas.shape[1]):
+        for t in range(policy_pred_horizon):
             x_cond = torch.zeros(curr_obs.shape[0], peva_context_size+1, curr_obs.shape[2], curr_obs.shape[3], curr_obs.shape[4], device=device)
             x_cond[:, :peva_context_size] = wm_obs[:, -peva_context_size:]
             
@@ -113,32 +91,11 @@ def waypoint_sample(policy_model, policy_diffusion,
                 progress=True
             )
             x_pred = x_pred[:, None] # B, 1, 3, H, W
-            generated_frames[:, (w * policy_pred_horizon) + t] = x_pred[:, 0]
+            gen_frames_accum[:, w, t] = x_pred[:, 0]
             curr_obs = torch.cat([curr_obs[:, 1:], x_pred], dim=1)
-            
-    # import os
-    # os.makedirs("logs/waypoint_cem_goal_vis", exist_ok=True)
-    # img_width = 8
-    # for b in range(B):
-    #     print("="*10)
-    #     print(b)
-    #     print("Pelvis", "initial", res_matrix[b, 0, 1].item(), "final", res_matrix[b, 0, 0].item())
-    #     print("Head", "initial", res_matrix[b, 1, 1].item(), "final", res_matrix[b, 1, 0].item())
-    #     print("R_Hand", "initial", res_matrix[b, 2, 1].item(), "final", res_matrix[b, 2, 0].item())
-    #     print("L_Hand", "initial", res_matrix[b, 3, 1].item(), "final", res_matrix[b, 3, 0].item())
-    #     print("All", "initial", res_matrix[b, 4, 1].item(), "final", res_matrix[b, 4, 0].item())
-    #     po = policy_obs[b]  # (policy_context_size, 3, H, W)
-    #     go = goal_obs[b][None]    # (1, 3, H, W)
-    #     blanks = torch.zeros_like(go).repeat(8-1-policy_context_size, 1, 1, 1)    # (8-1-policy_context_size, 3, H, W)
-    #     gen = generated_frames[b, :] # (W * policy_pred_horizon, 3, H, W)
-    #     imgs_to_save = torch.cat([po, go, blanks], dim=0)  # (policy_context_size + 1, 3, H, W)
-    #     # undo imagenet normalization
-    #     imgs_to_save = imgs_to_save * torch.tensor([0.229, 0.224, 0.225])[None, :, None, None].to(device) + torch.tensor([0.485, 0.456, 0.406])[None, :, None, None].to(device)
-    #     gen = gen * 0.5 + 0.5
-    #     imgs_to_save = torch.cat([imgs_to_save, gen], dim=0)  # (policy_context_size + 1 + W * policy_pred_horizon, 3, H, W)
-    #     save_image(imgs_to_save, f"logs/waypoint_cem_goal_vis/dist{math.floor(100*res_matrix[b, 4, 0].item())}-policy_goal_vis_row_w{w}_b{b}.png", nrow=img_width)
-        
-    return generated_frames, delta_accum
+    
+    gen_frames_accum = gen_frames_accum * 0.5 + 0.5        
+    return gen_frames_accum, delta_accum, goal_obs_accum
 
 @torch.no_grad()
 def model_forward_wrapper(all_models, curr_obs, curr_delta, latent_size, device, num_cond, rel_t=None, progress=False):

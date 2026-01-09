@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 import torch
 import yaml
 import copy
@@ -23,7 +24,8 @@ from planning.wrappers import Evaluator, ObjectiveDreamSIM, Preprocessor, Waypoi
 from torchvision.utils import save_image
 
 def main(args):
-    run_name = f"wapoint_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-e{args.eval_every}"
+    datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    run_name = f"wapoint_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}"
     if args.no_wandb:
         wandb_run = None
     else:
@@ -41,7 +43,8 @@ def main(args):
                 nomad_config["len_traj_pred"], nomad_config["input_dims"])   
     evaluator = Evaluator(model, peva_diffusion, vae, peva_stats, policy, policy_diffusion,
                     nomad_config["image_size"][0], peva_config["context_size"], nomad_config["context_size"]+1,
-                    nomad_config["len_traj_pred"], nomad_config["input_dims"])
+                    nomad_config["len_traj_pred"], nomad_config["input_dims"],
+                    num_eval_samples=args.num_eval_samples)
     objective_fn = ObjectiveDreamSIM(device="cuda")
     preprocessor = Preprocessor()
     cem_planner = CEMPlanner(
@@ -57,7 +60,8 @@ def main(args):
         preprocessor=preprocessor,
         evaluator=evaluator,
         wandb_run=wandb_run,
-        logging_prefix=run_name
+        logging_prefix=run_name,
+        log_dir=f"logs/cem/{datetime_str}:{run_name}"
     )
     
     dataset = get_nymeria_dataset(nomad_config, context_size=args.peva_context_size-1)
@@ -71,7 +75,7 @@ def main(args):
 
         deltas = batch["deltas"] # 1, horizon, action_dim
         first_pose = batch["first_pose"] # 1, 1, 48
-        xsens_offsets = batch["xsens_offsets"][0] # 15, 3
+        xsens_offsets = batch["xsens_offsets"] # 15, 3
         goal_obs = batch["goal_obs"] # 1, 3, H, W
         goal_image_coords = batch["goal_image_coords"] # 1, 23, 2
         
@@ -96,7 +100,7 @@ def main(args):
                  "xsens_offsets": xsens_offsets,
                  "goal_image_coords": goal_image_coords}
 
-        cem_planner.plan(obs_0, obs_g, actions=torch.ones(1, 1, 8) * 0.5)
+        cem_planner.plan(obs_0, obs_g, actions=torch.ones(1, args.horizon, 8) * 0.5)
         count += 1
         if args.num_samples_to_plan > 0 and count > args.num_samples_to_plan: break
         
@@ -109,7 +113,8 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--var_scale", type=float, default=0.5, help="Variance scale")
     parser.add_argument("-o", "--opt_steps", type=int, default=8, help="Optimization steps")
     parser.add_argument("-e", "--eval_every", type=int, default=1, help="Evaluation frequency")
-    parser.add_argument("-h", "--horizon", type=int, default=1, help="Time horizon")
+    parser.add_argument("-H", "--horizon", type=int, default=1, help="Time horizon")
+    parser.add_argument("-N", "--num_eval_samples", type=int, default=1, help="Number of evaluation samples")
     
     parser.add_argument("--keep_nonvisible_goal", action="store_true", help="Keep non-visible goal in the dataset")
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")

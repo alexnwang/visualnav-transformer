@@ -42,6 +42,41 @@ def _compute_pose_and_loss(actn, gt_actn, skel, actn_mask=None):
             res[f"{body_part_name}-xyz_distance"] = xyz_dist
         return res
 
+LEAF_INDICES = torch.tensor([XSensConstants.part_names.index(x) for x in ["Pelvis", "Head", "R_Hand", "L_Hand"]])
+def _compute_part_distance_matrices(pred_actn, gt_actn, skel, aggregate_indices=LEAF_INDICES):
+    """
+    Args:
+        pred_actn: B, 48
+        gt_actn: B, 48
+        skel: XsensSkeleton
+        aggregate_indices: 1D torch.tensor of indices to aggregate, or None to not aggregate
+    
+    Returns:
+        xyz_dist_matrix: B, XSensConstants.num_parts
+        ang_dist_matrix: B, XSensConstants.num_parts
+    """
+    B = pred_actn.shape[0]
+    num_parts = XSensConstants.upper_body_num_parts
+    xyz_dist_matrix = torch.zeros(B, num_parts, device=pred_actn.device)
+    ang_dist_matrix = torch.zeros(B, num_parts, device=pred_actn.device)
+    
+    gt_xyz, gt_rpy = forward_kinematics_wrapper(gt_actn, skel, XSensConstants.upper_body_num_parts, return_euler=True) # B, num_segments, 3
+    pred_xyz, pred_rpy = forward_kinematics_wrapper(pred_actn, skel, XSensConstants.upper_body_num_parts, return_euler=True) # B, num_segments, 3
+    
+    for i in range(XSensConstants.upper_body_num_parts):
+        R_gt = R.from_euler('xyz', gt_rpy[:, i, :].detach().cpu().numpy(), degrees=False)
+        R_pred = R.from_euler('xyz', pred_rpy[:, i, :].detach().cpu().numpy(), degrees=False)
+        ang_dist = torch.from_numpy((R_gt.inv() * R_pred).magnitude() / np.pi * 180).to(pred_actn.device).float() # B
+        xyz_dist = torch.norm(gt_xyz[:, i, :] - pred_xyz[:, i, :], dim=-1) # B
+        xyz_dist_matrix[:, i] = xyz_dist
+        ang_dist_matrix[:, i] = ang_dist
+        
+    if aggregate_indices is not None:
+        leaf_xyz = xyz_dist_matrix[:, aggregate_indices].mean(dim=-1).to(pred_actn.device)
+        ang_xyz = ang_dist_matrix[:, aggregate_indices].mean(dim=-1).to(pred_actn.device)
+        return xyz_dist_matrix, ang_dist_matrix, leaf_xyz, ang_xyz
+    return xyz_dist_matrix, ang_dist_matrix
+
 def draw_waypoints(obs, waypoints, color_order=["red", "green", "blue", "yellow"]):
     """
     Draws waypoint as circles on an image
