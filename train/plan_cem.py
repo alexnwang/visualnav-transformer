@@ -25,7 +25,7 @@ from torchvision.utils import save_image
 
 def main(args):
     datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    run_name = f"wapoint_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}"
+    run_name = f"wapoint_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
     if args.no_wandb:
         wandb_run = None
     else:
