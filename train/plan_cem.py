@@ -63,9 +63,9 @@ def main(args):
         logging_prefix=run_name,
         log_dir=f"logs/cem/{datetime_str}:{run_name}"
     )
-    
+    shuffle = False
     dataset = get_nymeria_dataset(nomad_config, context_size=args.peva_context_size-1)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=shuffle, num_workers=1)
     
     count = 0
     for idx, batch in enumerate(dataloader):
@@ -91,6 +91,13 @@ def main(args):
                         break
             if not visible:
                 continue
+            
+        assert shuffle == False, "shuffle must be False for dataloader"
+        track, track_index, _ = dataloader.dataset.index_to_data[idx]
+        run_name = f"{track}-{track_index}"
+        print("="*50)
+        print(f"Planning {run_name}")
+            
         obs_0 = {"images": obs_images,
                  "goal_image": goal_image,
                  "context_poses": context_poses}
@@ -100,7 +107,7 @@ def main(args):
                  "xsens_offsets": xsens_offsets,
                  "goal_image_coords": goal_image_coords}
 
-        cem_planner.plan(obs_0, obs_g, actions=torch.ones(1, args.horizon, 8) * 0.5)
+        cem_planner.plan(obs_0, obs_g, run_name, actions=torch.ones(1, args.horizon, 8) * 0.5)
         count += 1
         if args.num_samples_to_plan > 0 and count > args.num_samples_to_plan: break
         

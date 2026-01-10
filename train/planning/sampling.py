@@ -39,9 +39,7 @@ def waypoint_sample(policy_model, policy_diffusion,
     imagenet_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     wm_norm = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     
-    waypoints_pixels = waypoints*image_size
-    
-    B, W = waypoints_pixels.shape[:2]
+    B, W = waypoints.shape[:2]
     delta_accum = torch.zeros(B, W, policy_pred_horizon, policy_action_dim, device=device) # B, W*8, 48
     goal_obs_accum = torch.zeros(B, W, 3, image_size, image_size, device=device)
     if skip_last_peva:
@@ -53,7 +51,7 @@ def waypoint_sample(policy_model, policy_diffusion,
     for w in range(W):
         policy_obs = imagenet_norm(curr_obs[:, -policy_context_size:].flatten(0, 1)).unflatten(0, (B, policy_context_size))
         # goal_obs = imagenet_norm(curr_obs[:, -1])
-        goal_obs_accum[:, w] = goal_obs = draw_waypoints(curr_obs[:, -1], waypoints_pixels[:, w])
+        goal_obs_accum[:, w] = goal_obs = draw_waypoints(curr_obs[:, -1], waypoints[:, w])
         goal_obs = imagenet_norm(goal_obs)
         # goal_obs = imagenet_norm(goal_obs)
         

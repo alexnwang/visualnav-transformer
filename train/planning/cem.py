@@ -66,7 +66,8 @@ class CEMPlanner(BasePlanner):
         self.logging_prefix = logging_prefix
         
         os.makedirs(log_dir, exist_ok=True)
-        self.objective_fn.set_save_dir(log_dir)
+        
+        self.accum_metrics = {}
 
     def init_mu_sigma(self, obs_0, actions=None):
         """
@@ -88,7 +89,7 @@ class CEMPlanner(BasePlanner):
             mu = torch.cat([mu, new_mu.to(device)], dim=1)
         return mu, sigma
 
-    def plan(self, obs_0, obs_g, actions=None):
+    def plan(self, obs_0, obs_g, task_name, actions=None):
         """
         Args:
             actions: normalized
@@ -133,7 +134,7 @@ class CEMPlanner(BasePlanner):
                     act=action,
                 )
 
-            loss = self.objective_fn(i, i_state, curr_state_0, curr_latent_state_g, self.topk)
+            loss = self.objective_fn(i, i_state, curr_state_0, curr_latent_state_g, save_path=f"{self.log_dir}/{task_name}", topk=self.topk)
             topk_idx = torch.argsort(loss)[: self.topk]
             topk_action = action[topk_idx]
             losses.append(loss[topk_idx[0]].item())
@@ -142,19 +143,12 @@ class CEMPlanner(BasePlanner):
 
             if self.wandb_run is not None:
                 self.wandb_run.log(
-                    {f"loss": np.mean(losses), "step": i + 1}
+                    {f"loss": np.mean(losses), "avg_sigma": sigma.mean().item(), "step": i + 1}, commit=False
                 )
             if self.evaluator is not None and i % self.eval_every == 0:
-                # logs, successes, _, _ = self.evaluator.eval_actions(
-                #     mu, filename=f"{self.logging_prefix}_output_{i+1}"
-                # )
                 logs = self.evaluator.eval_actions(mu, trans_obs_0, z_obs_g)
-                logs = {f"eval/{k}": v for k, v in logs.items()}
+                logs = {f"{task_name}/{k}": v for k, v in logs.items()}
                 logs.update({"step": i + 1})
                 if self.wandb_run is not None:
                     self.wandb_run.log(logs)
-                # self.dump_logs(logs)
-            #     if np.all(successes):
-            #         break  # terminate planning if all success
-
-        return mu#, np.full(n_evals, np.inf)  # all actions are valid
+        return mu
