@@ -68,6 +68,7 @@ def main(args):
     dataloader = DataLoader(dataset, batch_size=1, shuffle=shuffle, num_workers=1)
     
     count = 0
+    curr_track, curr_index = None, None
     for idx, batch in enumerate(dataloader):
         obs_images = batch["obs_images"] # 1, context_size, 3, H, W
         goal_image = batch["goal_image"] # 1, 3, H, W
@@ -91,10 +92,15 @@ def main(args):
                         break
             if not visible:
                 continue
-            
         assert shuffle == False, "shuffle must be False for dataloader"
         track, track_index, _ = dataloader.dataset.index_to_data[idx]
         run_name = f"{track}-{track_index}"
+        
+        if curr_track == track and idx - curr_index < args.min_index_goal:
+            continue
+        curr_track = track
+        curr_index = idx
+        
         print("="*50)
         print(f"Planning {run_name}")
             
@@ -124,6 +130,7 @@ if __name__ == "__main__":
     parser.add_argument("-N", "--num_eval_samples", type=int, default=1, help="Number of evaluation samples")
     
     parser.add_argument("--keep_nonvisible_goal", action="store_true", help="Keep non-visible goal in the dataset")
+    parser.add_argument("--min_index_goal", type=int, default=80, help="Minimum index of the goal to plan")
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")
     parser.add_argument("--no_wandb", action="store_true", help="Don't use wandb")
     
