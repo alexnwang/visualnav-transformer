@@ -134,7 +134,7 @@ class CEMPlanner(BasePlanner):
                     act=action,
                 )
 
-            loss = self.objective_fn(i, i_state, curr_state_0, curr_latent_state_g, save_path=f"{self.log_dir}/{task_name}", topk=self.topk)
+            loss, log_dict = self.objective_fn(i, i_state, curr_state_0, curr_latent_state_g, save_path=f"{self.log_dir}/{task_name}", topk=self.topk)
             topk_idx = torch.argsort(loss)[: self.topk]
             topk_action = action[topk_idx]
             losses.append(loss[topk_idx[0]].item())
@@ -143,7 +143,7 @@ class CEMPlanner(BasePlanner):
 
             if self.wandb_run is not None:
                 self.wandb_run.log(
-                    {f"loss": np.mean(losses), "avg_sigma": sigma.mean().item(), "step": i + 1}, commit=False
+                    {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}, commit=False
                 )
             if self.evaluator is not None and i % self.eval_every == 0:
                 logs = self.evaluator.eval_actions(mu, trans_obs_0, z_obs_g)

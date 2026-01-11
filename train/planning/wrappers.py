@@ -138,7 +138,7 @@ class ObjectiveDreamSIM:
                            "DreamSIM", "Leaf Angular Distance", 
                            f"{save_path}/step{cem_step}-dreamSIM_ang.png", k=topk)
         print(f"ObjectiveFn: {res.mean().item()}")
-        return res
+        return res, {"loss": res.mean().item(), "xyz_distance": leaf_xyz.mean().item(), "angular_distance": leaf_ang.mean().item()}
     
     def save_plot(self, x, y, line_y, x_label, y_label, filename, k=0):
         plt.figure()
