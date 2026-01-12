@@ -5,12 +5,11 @@ import torch
 import copy
 from torchvision import transforms
 from dreamsim import dreamsim
-from torchvision.utils import np, save_image
+from planning.plotting_fns import save_rollout_images, save_topk_plot
 from vint_train.data.misc import XSensConstants, XsensSkeleton
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch
 from planning.utils import _compute_pose_and_loss, _compute_part_distance_matrices
 from planning.sampling import waypoint_sample
-import matplotlib.pyplot as plt
 
 class Preprocessor:
     def __init__(self, transform=torch.nn.Identity()):
@@ -86,8 +85,8 @@ class WaypointWM(torch.nn.Module):
                     device,
                     skip_last_peva=self.skip_last_peva)
         
-        return {"generated_obs": generated_frames.flatten(1,2).to(torch.float32),
-                "deltas": policy_sampled_deltas.flatten(1,2).to(torch.float32),
+        return {"generated_obs": generated_frames.to(torch.float32),
+                "deltas": policy_sampled_deltas.to(torch.float32),
                 "goal_images": waypoint_annotated_goals.to(torch.float32)}
 
 class ObjectiveDreamSIM:
@@ -101,7 +100,7 @@ class ObjectiveDreamSIM:
     
     def __call__(self, cem_step, rollout_state, state_0, goal_state, save_path=None, topk=0):
         first_pose = goal_state["first_pose"]
-        deltas = rollout_state["deltas"]
+        deltas = rollout_state["deltas"].flatten(1,2)
         gt_deltas = goal_state["deltas"]
         xsens_offsets = goal_state["xsens_offsets"][0]
         skel = XsensSkeleton(xsens_offsets)
@@ -112,15 +111,17 @@ class ObjectiveDreamSIM:
         (xyz_dist_matrix, ang_dist_matrix, leaf_xyz, leaf_ang) = _compute_part_distance_matrices(pred_actions[:, -1], gt_actions[:, -1], skel)
         _, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
         
-        context_images = state_0["images"] # B, peva_context_size, 3, H, W
-        pred_image = rollout_state["generated_obs"] # B, W*(pred_len), 3, H, W
-        waypoint_annotated_images = rollout_state["goal_images"] # B, W, 3, H, W
-        goal_image = goal_state["images"] # B, 3, H, W
-        B = pred_image.shape[0]
+        curr_obs = state_0["images"] # B, peva_context_size, 3, H, W
+        generated_obs = rollout_state["generated_obs"] # B, W, policy_pred_horizon, 3, H, W
+        rollout_waypoint_annotated_obs = rollout_state["goal_images"] # B, W, 3, H, W
+    
+        goal_obs = goal_state["images"] # B, 3, H, W
+        
+        B = generated_obs.shape[0]
         res = torch.empty(B, device=self.device)
         for i in range(B):
-            pred_image_pil = transforms.ToPILImage()(pred_image[i, -1])
-            goal_image_pil = transforms.ToPILImage()(goal_image[i])
+            pred_image_pil = transforms.ToPILImage()(generated_obs[i, -1, -1])
+            goal_image_pil = transforms.ToPILImage()(goal_obs[i])
             
             rollout_state = self.preprocess(pred_image_pil).to(self.device)
             goal_state = self.preprocess(goal_image_pil).to(self.device)
@@ -128,60 +129,23 @@ class ObjectiveDreamSIM:
             sim = self.model(rollout_state, goal_state)
             res[i] = sim
         if save_path is not None:
-            os.makedirs(f"{save_path}/step{cem_step}", exist_ok=True)
-            self.save_plot(res.detach().cpu().numpy(),
+            save_path = f"{save_path}/step{cem_step}-objective_step"
+            os.makedirs(save_path, exist_ok=True)
+            save_topk_plot(res.detach().cpu().numpy(),
                            leaf_xyz.detach().cpu().numpy(),
                            leaf_xyz_init[0].detach().cpu().numpy(),
                            "DreamSIM", "Leaf XYZ Distance", 
-                           f"{save_path}/step{cem_step}/dreamSIM_xyz.png", k=topk)
-            # self.save_plot(res.detach().cpu().numpy(),mysq
+                           f"{save_path}/dreamSIM_xyz.png", k=topk)
+            # save_topk_plot(res.detach().cpu().numpy(),mysq
             #                leaf_ang.detach().cpu().numpy(),
             #                leaf_ang_init[0].detach().cpu().numpy(),
             #                "DreamSIM", "Leaf Angular Distance", 
             #                f"{save_path}/step{cem_step}-dreamSIM_ang.png", k=topk)
-            self.save_rollout_images(context_images, pred_image, waypoint_annotated_images, goal_image,
-                                     [f"{save_path}/step{cem_step}/rollout_{i}-leaf_xyz{torch.round(leaf_xyz[i], decimals=3).item()}.png" for i in range(B)])
+            save_rollout_images(curr_obs, generated_obs, rollout_waypoint_annotated_obs, goal_obs,
+                                     [f"{save_path}/rollout_{i}-leaf_xyz{torch.round(leaf_xyz[i], decimals=3).item()}.png" for i in range(B)])
             
         print(f"ObjectiveFn: {res.mean().item()}")
         return res, {"loss": res.mean().item(), "xyz_distance": leaf_xyz.mean().item(), "angular_distance": leaf_ang.mean().item()}
-    
-    def save_rollout_images(self, context_images, pred_images, waypoint_annotated_images, goal_image, save_paths):
-        os.makedirs(os.path.dirname(save_paths[0]), exist_ok=True)
-        max_len = max(context_images.shape[1], pred_images.shape[1])
-        B, _, C, H, Wimg = context_images.shape
-        device = context_images.device
-        W, a, b = waypoint_annotated_images.shape[1], context_images.shape[1], pred_images.shape[1]
-        
-        # replace context and pred images with the appropriate waypoint annotated images
-        context_images = context_images.clone()
-        pred_images = pred_images.clone()
-        context_images[:, -1] = waypoint_annotated_images[:, 0].clone()
-        pred_len = b // W
-        for idx, timestep in enumerate(range(pred_len-1, b-pred_len, pred_len)):
-            pred_images[:, timestep] = waypoint_annotated_images[:, idx+1]
-        
-        image_list = [
-            context_images, torch.zeros(B, max_len-a, C, H, Wimg, device=device), # B, max_len, 3, H, W
-            pred_images, torch.zeros(B, max_len-b, C, H, Wimg, device=device), # B, max_len, 3, H, W
-            goal_image[:, None] # B, 1, 3, H, W
-        ]
-        image = torch.cat(image_list, dim=1) # B, 2*max_len+1, C,  H, W
-        for b in range(image.shape[0]):
-            save_image(image[b], save_paths[b], nrow=max_len)
-    
-    def save_plot(self, x, y, line_y, x_label, y_label, filename, k=0):
-        plt.figure()
-        if k > 0:
-            argsort = np.argsort(x)
-            plt.scatter(x[argsort[:k]], y[argsort[:k]], color='b')
-            plt.scatter(x[argsort[k:]], y[argsort[k:]], color='grey')
-        else:
-            plt.scatter(x, y)
-        plt.axhline(line_y, color='r', linestyle='--')
-        plt.xlabel(x_label)
-        plt.ylabel(y_label)
-        plt.savefig(filename.format(k=k))
-        plt.close()
     
 
 class Evaluator(WaypointWM):
@@ -198,7 +162,7 @@ class Evaluator(WaypointWM):
         if not self.skip_last_peva:
             print("WARNING: Evaluator is not skipping last PEVA rollout")
     
-    def eval_actions(self, actions_mu, state_0, state_g):
+    def eval_actions(self, cem_step, actions_mu, state_0, state_g, save_path=None):
         """
         actions_mu: B, T, action_dim
         gt_dict: dict of gt_actions, skel
@@ -236,16 +200,18 @@ class Evaluator(WaypointWM):
         ) = self.sample_fn(waypoints=waypoints, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)
         pred_deltas = policy_sampled_deltas.flatten(1,2)
         
-        _, deltas_gt_waypoints, _ = self.sample_fn(waypoints=gt_waypoints, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)
-        gt_waypoint_deltas = deltas_gt_waypoints.flatten(1,2)
+        gt_waypoint_deltas = self.sample_fn(waypoints=gt_waypoints, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1,2)
+        no_waypoint_deltas= self.sample_fn(waypoints=torch.ones_like(waypoints)*-1, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1,2)
         
         pred_actions = get_action_smpl_torch(first_pose, pred_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
         gt_actions = get_action_smpl_torch(first_pose, deltas_gt, XSensConstants.upper_body_num_parts) # B, T, 48
         gt_waypoint_actions = get_action_smpl_torch(first_pose, gt_waypoint_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
+        no_waypoint_actions = get_action_smpl_torch(first_pose, no_waypoint_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
         
         (xyz_dist_matrix, ang_dist_matrix, # B, num_parts
          leaf_xyz, leaf_ang) = _compute_part_distance_matrices(pred_actions[:, -1], gt_actions[:, -1], skel)
         _, _, leaf_xyz_gt_waypoints, leaf_ang_gt_waypoints = _compute_part_distance_matrices(gt_waypoint_actions[:, -1], gt_actions[:, -1], skel)
+        _, _, leaf_xyz_no_waypoints, leaf_ang_no_waypoints = _compute_part_distance_matrices(no_waypoint_actions[:, -1], gt_actions[:, -1], skel)
         _, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
         
         visible_indexer = (goal_image_coords != -1).all(dim=-1)[:, :XSensConstants.upper_body_num_parts] # B, num_parts
@@ -271,8 +237,17 @@ class Evaluator(WaypointWM):
             # "gt_waypoint-angular_distance": leaf_ang_gt_waypoints.mean().item(),
             "min-gt_waypoint-xyz_distance": leaf_xyz_gt_waypoints.min().item(),
             # "min-gt_waypoint-angular_distance": leaf_ang_gt_waypoints.min().item(),
+            "no_waypoint-xyz_distance": leaf_xyz_no_waypoints.mean().item(),
+            # "no_waypoint-angular_distance": leaf_ang_no_waypoints.mean().item(),
+            "min-no_waypoint-xyz_distance": leaf_xyz_no_waypoints.min().item(),
+            # "min-no_waypoint-angular_distance": leaf_ang_no_waypoints.min().item(),
             # other stuff
             "avg_waypoints_visible": avg_num_waypoints_visible.mean().item(),
         }
         pprint(res)
+        
+        if save_path is not None:
+            os.makedirs(save_path, exist_ok=True)
+            save_rollout_images(curr_obs[:1], generated_frames[:1], waypoint_annotated_goals[:1], goal_obs[:1],
+                                [f"{save_path}/eval_actions_step{cem_step}_{i}-leaf_xyz{torch.round(leaf_xyz[i], decimals=3).item()}.png" for i in range(B)])
         return res

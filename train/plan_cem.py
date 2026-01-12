@@ -1,5 +1,6 @@
 import argparse
 from datetime import datetime
+import os
 import torch
 import yaml
 import copy
@@ -25,13 +26,16 @@ from torchvision.utils import save_image
 
 def main(args):
     datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    run_name = f"wapoint_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
+    track_idx_name = f"wapoint_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
     if args.test:
-        run_name = "test" + run_name
+        track_idx_name = "test" + track_idx_name
     if args.no_wandb or args.test:
         wandb_run = None
     else:
-        wandb_run = wandb.init(project="peva-planning", name=run_name)
+        wandb_run = wandb.init(project="peva-planning", name=track_idx_name)
+    
+    log_dir = f"logs/cem/{datetime_str}:{track_idx_name}"
+    os.makedirs(log_dir, exist_ok=True)
     
     # load models
     policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device='cuda')
@@ -62,8 +66,8 @@ def main(args):
         preprocessor=preprocessor,
         evaluator=evaluator,
         wandb_run=wandb_run,
-        logging_prefix=run_name,
-        log_dir=f"logs/cem/{datetime_str}:{run_name}"
+        logging_prefix=track_idx_name,
+        log_dir=log_dir
     )
     shuffle = False
     dataset = get_nymeria_dataset(nomad_config, context_size=args.peva_context_size-1)
@@ -96,7 +100,7 @@ def main(args):
                 continue
         assert shuffle == False, "shuffle must be False for dataloader"
         track, track_index, _ = dataloader.dataset.index_to_data[idx]
-        run_name = f"{track}-{track_index}"
+        track_idx_name = f"{track}-{track_index}"
         
         if curr_track == track and idx - curr_index < args.min_index_goal:
             continue
@@ -104,7 +108,13 @@ def main(args):
         curr_index = idx
         
         print("="*50)
-        print(f"Planning {run_name}")
+        print(f"Planning {track_idx_name}")
+        
+        # visualize the context and goal images
+        os.makedirs(f"{log_dir}/{track_idx_name}")
+        save_img = torch.cat([obs_images, torch.zeros_like(obs_images[:, :-1]), goal_image[None]], dim=1)[0]
+        save_image(save_img, f"{log_dir}/{track_idx_name}/context_and_goal.png", nrow=obs_images.shape[1])
+        
             
         obs_0 = {"images": obs_images,
                  "goal_image": goal_image,
@@ -115,7 +125,7 @@ def main(args):
                  "xsens_offsets": xsens_offsets,
                  "goal_image_coords": goal_image_coords}
 
-        cem_planner.plan(obs_0, obs_g, run_name, actions=torch.ones(1, args.horizon, 8) * 0.5)
+        cem_planner.plan(obs_0, obs_g, track_idx_name, actions=torch.ones(1, args.horizon, 8) * 0.5)
         count += 1
         if args.num_samples_to_plan > 0 and count > args.num_samples_to_plan: break
         
