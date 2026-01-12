@@ -89,10 +89,11 @@ def waypoint_sample(policy_model, policy_diffusion,
                 progress=True
             )
             x_pred = x_pred[:, None] # B, 1, 3, H, W
-            gen_frames_accum[:, w, t] = x_pred[:, 0]
-            curr_obs = torch.cat([curr_obs[:, 1:], x_pred], dim=1)
+            wm_obs = torch.cat([wm_obs, x_pred], dim=1)
+            x_pred_unnorm = x_pred * 0.5 + 0.5
+            gen_frames_accum[:, w, t] = x_pred_unnorm[:, 0]
+            curr_obs = torch.cat([curr_obs[:, 1:], x_pred_unnorm], dim=1)
     
-    gen_frames_accum = gen_frames_accum * 0.5 + 0.5        
     return gen_frames_accum, delta_accum, goal_obs_accum
 
 @torch.no_grad()

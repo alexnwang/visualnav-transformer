@@ -5,7 +5,7 @@ import torch
 import copy
 from torchvision import transforms
 from dreamsim import dreamsim
-from torchvision.utils import np
+from torchvision.utils import np, save_image
 from vint_train.data.misc import XSensConstants, XsensSkeleton
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch
 from planning.utils import _compute_pose_and_loss, _compute_part_distance_matrices
@@ -112,8 +112,10 @@ class ObjectiveDreamSIM:
         (xyz_dist_matrix, ang_dist_matrix, leaf_xyz, leaf_ang) = _compute_part_distance_matrices(pred_actions[:, -1], gt_actions[:, -1], skel)
         _, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
         
-        pred_image = rollout_state["generated_obs"]
-        goal_image = goal_state["images"]
+        context_images = state_0["images"] # B, peva_context_size, 3, H, W
+        pred_image = rollout_state["generated_obs"] # B, W*(pred_len), 3, H, W
+        waypoint_annotated_images = rollout_state["goal_images"] # B, W, 3, H, W
+        goal_image = goal_state["images"] # B, 3, H, W
         B = pred_image.shape[0]
         res = torch.empty(B, device=self.device)
         for i in range(B):
@@ -126,19 +128,46 @@ class ObjectiveDreamSIM:
             sim = self.model(rollout_state, goal_state)
             res[i] = sim
         if save_path is not None:
-            os.makedirs(save_path, exist_ok=True)
+            os.makedirs(f"{save_path}/step{cem_step}", exist_ok=True)
             self.save_plot(res.detach().cpu().numpy(),
                            leaf_xyz.detach().cpu().numpy(),
                            leaf_xyz_init[0].detach().cpu().numpy(),
                            "DreamSIM", "Leaf XYZ Distance", 
-                           f"{save_path}/step{cem_step}-dreamSIM_xyz.png", k=topk)
-            self.save_plot(res.detach().cpu().numpy(),
-                           leaf_ang.detach().cpu().numpy(),
-                           leaf_ang_init[0].detach().cpu().numpy(),
-                           "DreamSIM", "Leaf Angular Distance", 
-                           f"{save_path}/step{cem_step}-dreamSIM_ang.png", k=topk)
+                           f"{save_path}/step{cem_step}/dreamSIM_xyz.png", k=topk)
+            # self.save_plot(res.detach().cpu().numpy(),mysq
+            #                leaf_ang.detach().cpu().numpy(),
+            #                leaf_ang_init[0].detach().cpu().numpy(),
+            #                "DreamSIM", "Leaf Angular Distance", 
+            #                f"{save_path}/step{cem_step}-dreamSIM_ang.png", k=topk)
+            self.save_rollout_images(context_images, pred_image, waypoint_annotated_images, goal_image,
+                                     [f"{save_path}/step{cem_step}/rollout_{i}-leaf_xyz{torch.round(leaf_xyz[i], decimals=3).item()}.png" for i in range(B)])
+            
         print(f"ObjectiveFn: {res.mean().item()}")
         return res, {"loss": res.mean().item(), "xyz_distance": leaf_xyz.mean().item(), "angular_distance": leaf_ang.mean().item()}
+    
+    def save_rollout_images(self, context_images, pred_images, waypoint_annotated_images, goal_image, save_paths):
+        os.makedirs(os.path.dirname(save_paths[0]), exist_ok=True)
+        max_len = max(context_images.shape[1], pred_images.shape[1])
+        B, _, C, H, Wimg = context_images.shape
+        device = context_images.device
+        W, a, b = waypoint_annotated_images.shape[1], context_images.shape[1], pred_images.shape[1]
+        
+        # replace context and pred images with the appropriate waypoint annotated images
+        context_images = context_images.clone()
+        pred_images = pred_images.clone()
+        context_images[:, -1] = waypoint_annotated_images[:, 0].clone()
+        pred_len = b // W
+        for idx, timestep in enumerate(range(pred_len-1, b-pred_len, pred_len)):
+            pred_images[:, timestep] = waypoint_annotated_images[:, idx+1]
+        
+        image_list = [
+            context_images, torch.zeros(B, max_len-a, C, H, Wimg, device=device), # B, max_len, 3, H, W
+            pred_images, torch.zeros(B, max_len-b, C, H, Wimg, device=device), # B, max_len, 3, H, W
+            goal_image[:, None] # B, 1, 3, H, W
+        ]
+        image = torch.cat(image_list, dim=1) # B, 2*max_len+1, C,  H, W
+        for b in range(image.shape[0]):
+            save_image(image[b], save_paths[b], nrow=max_len)
     
     def save_plot(self, x, y, line_y, x_label, y_label, filename, k=0):
         plt.figure()
