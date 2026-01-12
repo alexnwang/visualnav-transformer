@@ -4,19 +4,25 @@ import numpy as np
 import torch
 from torchvision.utils import save_image
 
-def save_topk_plot(x, y, line_y, x_label, y_label, filename, k=0):
-        plt.figure()
-        if k > 0:
-            argsort = np.argsort(x)
-            plt.scatter(x[argsort[:k]], y[argsort[:k]], color='b')
-            plt.scatter(x[argsort[k:]], y[argsort[k:]], color='grey')
-        else:
-            plt.scatter(x, y)
-        plt.axhline(line_y, color='r', linestyle='--')
-        plt.xlabel(x_label)
-        plt.ylabel(y_label)
-        plt.savefig(filename.format(k=k))
-        plt.close()
+def save_topk_plot(x, y, lines, x_label, y_label, filename, k=0):
+    plt.figure()
+    if k > 0:
+        argsort = np.argsort(x)
+        plt.scatter(x[argsort[:k]], y[argsort[:k]], color='b')
+        plt.scatter(x[argsort[k:]], y[argsort[k:]], color='grey')
+    else:
+        plt.scatter(x, y)
+        
+    if isinstance(lines, dict):
+        for line_name, line_y in lines.items():
+            plt.axhline(line_y, label=line_name, linestyle='--')
+        plt.legend()
+    else:
+        plt.axhline(lines, color='r', linestyle='--')
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.savefig(filename)
+    plt.close()
         
 def save_rollout_images(context_images, pred_images, waypoint_annotated_images, goal_image, save_paths): 
     """

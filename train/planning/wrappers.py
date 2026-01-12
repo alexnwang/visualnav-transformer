@@ -5,6 +5,7 @@ import torch
 import copy
 from torchvision import transforms
 from dreamsim import dreamsim
+import numpy as np
 from planning.plotting_fns import save_rollout_images, save_topk_plot
 from vint_train.data.misc import XSensConstants, XsensSkeleton
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch
@@ -142,7 +143,7 @@ class ObjectiveDreamSIM:
             #                "DreamSIM", "Leaf Angular Distance", 
             #                f"{save_path}/step{cem_step}-dreamSIM_ang.png", k=topk)
             save_rollout_images(curr_obs, generated_obs, rollout_waypoint_annotated_obs, goal_obs,
-                                     [f"{save_path}/rollout_{i}-leaf_xyz{torch.round(leaf_xyz[i], decimals=3).item()}.png" for i in range(B)])
+                                     [f"{save_path}/rollout_{i}-leaf_xyz{np.round(leaf_xyz[i].item(), decimals=3)}.png" for i in range(B)])
             
         print(f"ObjectiveFn: {res.mean().item()}")
         return res, {"loss": res.mean().item(), "xyz_distance": leaf_xyz.mean().item(), "angular_distance": leaf_ang.mean().item()}
@@ -241,13 +242,16 @@ class Evaluator(WaypointWM):
             # "no_waypoint-angular_distance": leaf_ang_no_waypoints.mean().item(),
             "min-no_waypoint-xyz_distance": leaf_xyz_no_waypoints.min().item(),
             # "min-no_waypoint-angular_distance": leaf_ang_no_waypoints.min().item(),
-            # other stuff
+        }
+        aux_counts = {
             "avg_waypoints_visible": avg_num_waypoints_visible.mean().item(),
         }
-        pprint(res)
+        pprint({**res, **aux_counts})
         
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
-            save_rollout_images(curr_obs[:1], generated_frames[:1], waypoint_annotated_goals[:1], goal_obs[:1],
-                                [f"{save_path}/eval_actions_step{cem_step}_{i}-leaf_xyz{torch.round(leaf_xyz[i], decimals=3).item()}.png" for i in range(B)])
-        return res
+            for i in range(B):
+                leaf_xyz_val_rounded = np.round(leaf_xyz.unflatten(0, (B, -1))[i].mean().item(), decimals=3)
+                save_rollout_images(curr_obs[:1], generated_frames[:1], waypoint_annotated_goals[:1], goal_obs[:1],
+                                    [f"{save_path}/eval_actions_step{cem_step}_{i}-leaf_xyz{leaf_xyz_val_rounded}.png"])
+        return res, aux_counts

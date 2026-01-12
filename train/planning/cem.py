@@ -1,3 +1,4 @@
+from collections import defaultdict
 import os
 import torch
 import numpy as np
@@ -27,6 +28,11 @@ class CEMPlanner(BasePlanner):
         wandb_run,
         logging_prefix="plan_0",
         log_dir="logs/cem",
+        metric_keys=["xyz_distance",
+                     "visible_xyz_distance",
+                     "gt_waypoint-xyz_distance",
+                     "no_waypoint-xyz_distance",
+                     "start_xyz_distance"],
         **kwargs,
     ):
         """
@@ -45,7 +51,7 @@ class CEMPlanner(BasePlanner):
             wandb_run (wandb.Run): the wandb run
             logging_prefix (str): the prefix of the logging
             log_dir (str): the directory of the logs
-            log_filename (str): the filename of the logs
+            metric_keys (list): the keys of the metrics to log, the first key is the primary metric
         """
         super().__init__(
             wm,
@@ -67,7 +73,15 @@ class CEMPlanner(BasePlanner):
         
         os.makedirs(log_dir, exist_ok=True)
         
-        self.accum_metrics = {}
+        self.metric_keys = metric_keys
+        self.accum_metrics = defaultdict(list)
+        
+    def store_metrics(self, metrics):
+        for k, v in metrics.items():
+            self.accum_metrics[k].append(v)
+    
+    def get_average_metrics(self, prefix=""):
+        return {f"{prefix}{k}": np.mean(v) for k, v in self.accum_metrics.items()}
 
     def init_mu_sigma(self, obs_0, actions=None):
         """
@@ -106,7 +120,9 @@ class CEMPlanner(BasePlanner):
         mu, sigma = self.init_mu_sigma(obs_0, actions)
         mu, sigma = mu.to(self.device), sigma.to(self.device)
         assert actions.shape[0] == 1
-        # n_evals = mu.shape[0]
+
+        best_eval_metrics = {k: float('inf') for k in self.metric_keys}
+        
         for i in range(self.opt_steps):
             # optimize individual instances
             losses = []
@@ -147,9 +163,15 @@ class CEMPlanner(BasePlanner):
                     {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}, commit=False
                 )
             if self.evaluator is not None and i % self.eval_every == 0:
-                logs = self.evaluator.eval_actions(i, mu, trans_obs_0, z_obs_g, save_path=f"{self.log_dir}/{task_name}")
-                logs = {f"{task_name}/{k}": v for k, v in logs.items()}
-                logs.update({"step": i + 1})
+                metrics, other_vals = self.evaluator.eval_actions(i, mu, trans_obs_0, z_obs_g, save_path=f"{self.log_dir}/{task_name}")
+                logs_tagged = {f"{task_name}/{k}": v for k, v in {**metrics, **other_vals}.items()}
+                logs_tagged.update({"step": i + 1})
                 if self.wandb_run is not None:
-                    self.wandb_run.log(logs)
+                    self.wandb_run.log(logs_tagged, commit=True)
+                
+                for key in self.metric_keys:
+                    if metrics[key] < best_eval_metrics[key]:
+                        best_eval_metrics[key] = metrics[key]
+        self.store_metrics(best_eval_metrics)
+        self.wandb_run.log(self.get_average_metrics(prefix="accum/"), commit=True)
         return mu
