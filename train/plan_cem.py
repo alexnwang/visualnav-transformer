@@ -26,7 +26,9 @@ from torchvision.utils import save_image
 def main(args):
     datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     run_name = f"wapoint_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
-    if args.no_wandb:
+    if args.test:
+        run_name = "test" + run_name
+    if args.no_wandb or args.test:
         wandb_run = None
     else:
         wandb_run = wandb.init(project="peva-planning", name=run_name)
@@ -133,6 +135,7 @@ if __name__ == "__main__":
     parser.add_argument("--min_index_goal", type=int, default=80, help="Minimum index of the goal to plan")
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")
     parser.add_argument("--no_wandb", action="store_true", help="Don't use wandb")
+    parser.add_argument("--test", action="store_true", help="Test run")
     
     parser.add_argument("--peva_config", type=str, default="/home/anw2067/visualnav-transformer/train/peva/config/nymeria_rel_concat_embedding_compile_beta095_ar_model_context_16_bs_16_smpl_lowebody_-64to_64_1_goal_emb_relative_xxl.yaml")
     parser.add_argument("--peva_checkpoint", type=str, default="/scratch/anw2067/nymeria_rel_concat_embedding_compile_beta095_ar_model_context_16_bs_16_smpl_lowebody_cancel_scaler_-64to_64_xxl_280_0180000.pth.tar")
