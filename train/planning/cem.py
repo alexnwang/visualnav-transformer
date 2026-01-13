@@ -26,7 +26,6 @@ class CEMPlanner(BasePlanner):
         preprocessor,
         evaluator,
         wandb_run,
-        logging_prefix="plan_0",
         log_dir="logs/cem",
         metric_keys=["xyz_distance",
                      "visible_xyz_distance",
@@ -49,7 +48,6 @@ class CEMPlanner(BasePlanner):
             preprocessor (Preprocessor): the preprocessor, image preprocessing
             evaluator (Evaluator): the evaluator for mu after eval_every steps
             wandb_run (wandb.Run): the wandb run
-            logging_prefix (str): the prefix of the logging
             log_dir (str): the directory of the logs
             metric_keys (list): the keys of the metrics to log, the first key is the primary metric
         """
@@ -69,7 +67,6 @@ class CEMPlanner(BasePlanner):
         self.var_scale = var_scale
         self.opt_steps = opt_steps
         self.eval_every = eval_every
-        self.logging_prefix = logging_prefix
         
         os.makedirs(log_dir, exist_ok=True)
         
@@ -119,7 +116,6 @@ class CEMPlanner(BasePlanner):
         z_obs_g = self.wm.encode_obs(trans_obs_g)
         mu, sigma = self.init_mu_sigma(obs_0, actions)
         mu, sigma = mu.to(self.device), sigma.to(self.device)
-        assert actions.shape[0] == 1
 
         best_eval_metrics = {k: float('inf') for k in self.metric_keys}
         
@@ -170,7 +166,7 @@ class CEMPlanner(BasePlanner):
                     self.wandb_run.log(logs_tagged, commit=True)
                 
                 for key in self.metric_keys:
-                    if metrics[key] < best_eval_metrics[key]:
+                    if key in metrics and metrics[key] < best_eval_metrics[key]:
                         best_eval_metrics[key] = metrics[key]
         self.store_metrics(best_eval_metrics)
         self.wandb_run.log(self.get_average_metrics(prefix="accum/"), commit=True)

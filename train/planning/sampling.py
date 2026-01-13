@@ -73,7 +73,6 @@ def waypoint_sample(policy_model, policy_diffusion,
             x_cond[:, :peva_context_size] = wm_obs[:, -peva_context_size:]
             
             curr_delta = peva_normalized_deltas[:, t:t+1].repeat(1, peva_context_size, 1,) 
-            device = curr_obs.device
             
             rel_const = 1. / (64-(-64))  # distance is set in eval, but fixed to [8, 8] for now.
             rel_const = rel_const * 1 # multiply the rel_const by rollout_stride 
@@ -121,6 +120,42 @@ def model_forward_wrapper(all_models, curr_obs, curr_delta, latent_size, device,
         samples = vae.decode(samples / 0.18215).sample # B, 3, image_size, image_size 
         return torch.clip(samples, -1., 1.)
     
+def peva_sample(peva_model, peva_diffusion, peva_vae, peva_stats,
+                curr_obs, deltas,
+                peva_context_size, peva_latent_size,
+                image_size, device):
+    wm_norm = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+    
+    B, T = deltas.shape[:2]
+    gen_frames_accum = torch.zeros(B, T, 3, image_size, image_size, device=device)
+    wm_obs = wm_norm(curr_obs.flatten(0, 1)).unflatten(0, (B, -1))
+    peva_normalized_deltas = normalize_data_smpl_pose(deltas, peva_stats)
+    for t in range(T):
+        x_cond = torch.zeros(curr_obs.shape[0], peva_context_size+1, curr_obs.shape[2], curr_obs.shape[3], curr_obs.shape[4], device=device)
+        x_cond[:, :peva_context_size] = wm_obs[:, -peva_context_size:]
+        
+        curr_delta = peva_normalized_deltas[:, t:t+1].repeat(1, peva_context_size, 1,) 
+        
+        rel_const = 1. / (64-(-64))  # distance is set in eval, but fixed to [8, 8] for now.
+        rel_const = rel_const * 1 # multiply the rel_const by rollout_stride 
+        rel_t = (torch.ones(curr_obs.shape[0], peva_context_size, device=device) * rel_const)
+        x_pred = model_forward_wrapper(
+            (peva_model, peva_diffusion, peva_vae),
+            x_cond,
+            curr_delta,
+            peva_latent_size,
+            device,
+            num_cond=curr_obs.shape[1],
+            rel_t=rel_t,
+            progress=True
+        )
+        x_pred = x_pred[:, None] # B, 1, 3, H, W
+        wm_obs = torch.cat([wm_obs, x_pred], dim=1)
+        x_pred_unnorm = x_pred * 0.5 + 0.5 # B, 1, 3, H, W
+        gen_frames_accum[:, t] = x_pred_unnorm[:, 0]
+        curr_obs = torch.cat([curr_obs[:, 1:], x_pred_unnorm], dim=1)
+    return gen_frames_accum, deltas
+
 @torch.no_grad()
 def policy_sample(
     model: torch.nn.Module,

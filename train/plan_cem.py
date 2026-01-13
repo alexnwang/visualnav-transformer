@@ -20,38 +20,56 @@ from peva.diffusion import create_diffusion
 from vint_train.data.misc import XSensConstants
 from planning.cem import CEMPlanner
 from planning.utils import get_nymeria_dataset, load_peva, load_policy
-from planning.wrappers import Evaluator, ObjectiveDreamSIM, Preprocessor, WaypointWM
+from planning.wrappers import EvaluatorPeva, EvaluatorWaypoint, ObjectiveDreamSIM, PevaWM, Preprocessor, WaypointWM
 
 from torchvision.utils import save_image
 
-def main(args):
-    datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    track_idx_name = f"wapoint_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
-    if args.test:
-        track_idx_name = "test" + track_idx_name
-    if args.no_wandb or args.test:
-        wandb_run = None
-    else:
-        wandb_run = wandb.init(project="peva-planning", name=track_idx_name)
-    
-    log_dir = f"logs/cem/{datetime_str}:{track_idx_name}"
-    os.makedirs(log_dir, exist_ok=True)
-    
-    # load models
+def build_peva_cem(args, wandb_run, log_dir):
     policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device='cuda')
     model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device='cuda',
-                                                                  inference_context_size=args.peva_context_size,
-                                                                  diffusion_steps=args.peva_diffusion_steps)
+                                                                inference_context_size=args.peva_context_size,
+                                                                diffusion_steps=args.peva_diffusion_steps)
+    
+    # construct wrappers and CEM planner
+    wm_wrapper = PevaWM(model, peva_diffusion, vae, peva_stats,
+                        nomad_config["image_size"][0], peva_config["context_size"])   
+    evaluator = EvaluatorPeva(model, peva_diffusion, vae, peva_stats,
+                    nomad_config["image_size"][0], peva_config["context_size"],
+                    num_eval_samples=args.num_eval_samples)
+    objective_fn = ObjectiveDreamSIM(pred_horizon=args.horizon, device="cuda")
+    preprocessor = Preprocessor()
+    cem_planner = CEMPlanner(
+        horizon=args.horizon,
+        topk=args.topk,
+        num_samples=args.num_samples,
+        var_scale=args.var_scale,
+        opt_steps=args.opt_steps,
+        eval_every=args.eval_every,
+        wm=wm_wrapper,
+        action_dim=48,
+        objective_fn=objective_fn,
+        preprocessor=preprocessor,
+        evaluator=evaluator,
+        wandb_run=wandb_run,
+        log_dir=log_dir
+    )
+    return cem_planner, nomad_config, peva_config
+
+def build_waypoint_cem(args, wandb_run, log_dir,):
+    policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device='cuda')
+    model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device='cuda',
+                                                                inference_context_size=args.peva_context_size,
+                                                                diffusion_steps=args.peva_diffusion_steps)
     
     # construct wrappers and CEM planner
     wm_wrapper = WaypointWM(model, peva_diffusion, vae, peva_stats, policy, policy_diffusion,
                 nomad_config["image_size"][0], peva_config["context_size"], nomad_config["context_size"]+1,
                 nomad_config["len_traj_pred"], nomad_config["input_dims"])   
-    evaluator = Evaluator(model, peva_diffusion, vae, peva_stats, policy, policy_diffusion,
+    evaluator = EvaluatorWaypoint(model, peva_diffusion, vae, peva_stats, policy, policy_diffusion,
                     nomad_config["image_size"][0], peva_config["context_size"], nomad_config["context_size"]+1,
                     nomad_config["len_traj_pred"], nomad_config["input_dims"],
                     num_eval_samples=args.num_eval_samples)
-    objective_fn = ObjectiveDreamSIM(device="cuda")
+    objective_fn = ObjectiveDreamSIM(pred_horizon=nomad_config["len_traj_pred"], device="cuda")
     preprocessor = Preprocessor()
     cem_planner = CEMPlanner(
         horizon=args.horizon,
@@ -66,9 +84,34 @@ def main(args):
         preprocessor=preprocessor,
         evaluator=evaluator,
         wandb_run=wandb_run,
-        logging_prefix=track_idx_name,
         log_dir=log_dir
     )
+    return cem_planner, nomad_config, peva_config
+
+def main(args):
+    algo = args.algo
+    
+    datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    track_idx_name = f"{algo}_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
+    if args.test:
+        track_idx_name = "test" + track_idx_name
+    if args.no_wandb or args.test:
+        wandb_run = None
+    else:
+        wandb_run = wandb.init(project="peva-planning", name=track_idx_name)
+    
+    log_dir = f"logs/cem/{datetime_str}:{track_idx_name}"
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # load models
+    if algo == "waypoint": 
+        action_init = torch.ones(1, args.horizon, 8) * 0.5
+        cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir)
+    elif algo == "peva":
+        action_init = None
+        cem_planner, nomad_config, peva_config = build_peva_cem(args, wandb_run, log_dir)
+        
+    # prepare dataset
     shuffle = False
     dataset = get_nymeria_dataset(nomad_config, context_size=args.peva_context_size-1)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=shuffle, num_workers=1)
@@ -125,13 +168,15 @@ def main(args):
                  "xsens_offsets": xsens_offsets,
                  "goal_image_coords": goal_image_coords}
 
-        cem_planner.plan(obs_0, obs_g, track_idx_name, actions=torch.ones(1, args.horizon, 8) * 0.5)
+        cem_planner.plan(obs_0, obs_g, track_idx_name, actions=action_init)
         count += 1
         if args.num_samples_to_plan > 0 and count > args.num_samples_to_plan: break
         
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    
+    parser.add_argument("-a", "--algo", type=str, choices=["peva", "waypoint"], default="waypoint", help="Planning algorithm")
     
     parser.add_argument("-n", "--num_samples", type=int, default=32, help="Number of samples")
     parser.add_argument("-t", "--topk", type=int, default=4, help="Top k samples")
