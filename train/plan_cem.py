@@ -36,7 +36,7 @@ def build_peva_cem(args, wandb_run, log_dir):
     evaluator = EvaluatorPeva(model, peva_diffusion, vae, peva_stats,
                     nomad_config["image_size"][0], peva_config["context_size"],
                     num_eval_samples=args.num_eval_samples)
-    objective_fn = ObjectiveDreamSIM(pred_horizon=args.horizon, device="cuda")
+    objective_fn = ObjectiveDreamSIM(pred_horizon=args.horizon, device="cuda", return_metric=args.use_leafxyz_as_cost)
     preprocessor = Preprocessor()
     cem_planner = CEMPlanner(
         horizon=args.horizon,
@@ -69,7 +69,7 @@ def build_waypoint_cem(args, wandb_run, log_dir,):
                     nomad_config["image_size"][0], peva_config["context_size"], nomad_config["context_size"]+1,
                     nomad_config["len_traj_pred"], nomad_config["input_dims"],
                     num_eval_samples=args.num_eval_samples)
-    objective_fn = ObjectiveDreamSIM(pred_horizon=nomad_config["len_traj_pred"], device="cuda")
+    objective_fn = ObjectiveDreamSIM(pred_horizon=nomad_config["len_traj_pred"], device="cuda", return_metric=args.use_leafxyz_as_cost)
     preprocessor = Preprocessor()
     cem_planner = CEMPlanner(
         horizon=args.horizon,
@@ -93,6 +93,8 @@ def main(args):
     
     datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     track_idx_name = f"{algo}_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
+    if args.use_leafxyz_as_cost:
+        track_idx_name = "CHEATMETRIC_leafxyz_as_cost" + track_idx_name
     if args.test:
         track_idx_name = "test" + track_idx_name
     if args.no_wandb or args.test:
@@ -177,6 +179,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     
     parser.add_argument("-a", "--algo", type=str, choices=["peva", "waypoint"], default="waypoint", help="Planning algorithm")
+    parser.add_argument("--use_leafxyz_as_cost", action='store_true', help="Uses the metric(leaf-xyz) instead of a normal cost_fn")
     
     parser.add_argument("-n", "--num_samples", type=int, default=32, help="Number of samples")
     parser.add_argument("-t", "--topk", type=int, default=4, help="Top k samples")

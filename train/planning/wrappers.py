@@ -129,11 +129,19 @@ class WaypointWM(WMWrapper):
                 "goal_images": waypoint_annotated_goals.to(torch.float32)}
 
 class ObjectiveDreamSIM:
-    def __init__(self, pred_horizon, device):
+    def __init__(self, pred_horizon, device,
+                 return_metric=False,):
+        """
+        Args:
+            pred_horizon (int): the prediction horizon
+            device (str): the device to use
+            return_metric (bool): whether to return the metric rather than DreamSIM distance. This is a cheat method.
+        """
         self.pred_horizon = pred_horizon
         self.device = device
         self.model, self.preprocess = dreamsim(pretrained=True, device=device, cache_dir="/scratch/anw2067/cache")
         self.save_dir = None
+        self.return_metric = return_metric
 
     def set_save_dir(self, save_dir):
         self.save_dir = save_dir
@@ -182,7 +190,10 @@ class ObjectiveDreamSIM:
                                      pred_len=self.pred_horizon)
             
         print(f"ObjectiveFn: {res.mean().item()}")
-        return res, {"loss": res.mean().item(), "xyz_distance": leaf_xyz.mean().item(), "angular_distance": leaf_ang.mean().item()}
+        if self.return_metric:
+            return leaf_xyz, {"loss": res.mean().item(), "xyz_distance": leaf_xyz.mean().item(), "angular_distance": leaf_ang.mean().item()}
+        else:
+            return res, {"loss": res.mean().item(), "xyz_distance": leaf_xyz.mean().item(), "angular_distance": leaf_ang.mean().item()}
     
 class EvaluatorPeva(PevaWM):
     def __init__(self,
@@ -235,7 +246,7 @@ class EvaluatorPeva(PevaWM):
             "min-xyz_distance": leaf_xyz.min().item(),
             # "min-angular_distance": leaf_ang.min().item(),
             "start_xyz_distance": leaf_xyz_init.mean().item(),
-            "start_angular_distance": leaf_ang_init.mean().item(),
+            # "start_angular_distance": leaf_ang_init.mean().item(),
         }
         pprint({**res})
         if save_path is not None:
