@@ -169,5 +169,7 @@ class CEMPlanner(BasePlanner):
                     if key in metrics and metrics[key] < best_eval_metrics[key]:
                         best_eval_metrics[key] = metrics[key]
         self.store_metrics(best_eval_metrics)
-        self.wandb_run.log(self.get_average_metrics(prefix="accum/"), commit=True)
+        log_metrics_dict = {f"active/{k}": v[-1] for k, v in self.accum_metrics.items()}
+        log_metrics_dict.update({f"accum/{k}": np.mean(v) for k, v in self.accum_metrics.items()})
+        self.wandb_run.log(log_metrics_dict, commit=True)
         return mu
