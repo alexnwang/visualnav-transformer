@@ -99,7 +99,7 @@ def draw_waypoints(obs, waypoints, color_order=["red", "green", "blue", "yellow"
         output_images.append(image)
     return torch.stack(output_images, dim=0).to(device)
 
-def get_nymeria_dataset(config, context_size=15-1, split="test"):
+def get_nymeria_dataset(config, context_size=15-1, split="test", goal_timestep_offset=None):
     """
     Utility for building the Nymeria dataset for CEM planning.
     Notably, does not normalize loaded deltas.
@@ -114,6 +114,9 @@ def get_nymeria_dataset(config, context_size=15-1, split="test"):
         data_config["end_slack"] = 0
     if "goals_per_obs" not in data_config:
         data_config["goals_per_obs"] = 1
+    if goal_timestep_offset is not None:
+        config['distance']['min_dist_cat'] = goal_timestep_offset
+        config['distance']['max_dist_cat'] = goal_timestep_offset
 
     ### EVAL ONLY -- DO NOT NORMALIZE THE DELTAS
     config["normalize"] = False

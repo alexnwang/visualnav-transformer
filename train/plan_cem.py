@@ -95,6 +95,8 @@ def main(args):
     track_idx_name = f"{algo}_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
     if args.use_leafxyz_as_cost:
         track_idx_name = "CHEATMETRIC_leafxyz_as_cost" + track_idx_name
+    if args.goal_timestep_offset is not None:
+        track_idx_name = track_idx_name + f"-gt{args.goal_timestep_offset}"
     if args.test:
         track_idx_name = "test" + track_idx_name
     if args.no_wandb or args.test:
@@ -115,7 +117,7 @@ def main(args):
         
     # prepare dataset
     shuffle = False
-    dataset = get_nymeria_dataset(nomad_config, context_size=args.peva_context_size-1)
+    dataset = get_nymeria_dataset(nomad_config, context_size=args.peva_context_size-1, goal_timestep_offset=args.goal_timestep_offset)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=shuffle, num_workers=1)
     
     count = 0
@@ -180,6 +182,7 @@ if __name__ == "__main__":
     
     parser.add_argument("-a", "--algo", type=str, choices=["peva", "waypoint"], default="waypoint", help="Planning algorithm")
     parser.add_argument("--use_leafxyz_as_cost", action='store_true', help="Uses the metric(leaf-xyz) instead of a normal cost_fn")
+    parser.add_argument("--goal_timestep_offset", type=int, default=None, help="Goal timestep offset")
     
     parser.add_argument("-n", "--num_samples", type=int, default=32, help="Number of samples")
     parser.add_argument("-t", "--topk", type=int, default=4, help="Top k samples")
