@@ -46,7 +46,8 @@ def waypoint_sample(policy_model, policy_diffusion,
         gen_frames_accum = torch.zeros(B, (W-1), policy_pred_horizon, 3, image_size, image_size, device=device)
     else:
         gen_frames_accum = torch.zeros(B, W, policy_pred_horizon, 3, image_size, image_size, device=device)
-        
+    
+    curr_poses = context_poses.clone()
     wm_obs = wm_norm(curr_obs.flatten(0, 1)).unflatten(0, (B, -1))
     for w in range(W):
         policy_obs = imagenet_norm(curr_obs[:, -policy_context_size:].flatten(0, 1)).unflatten(0, (B, policy_context_size))
@@ -57,9 +58,13 @@ def waypoint_sample(policy_model, policy_diffusion,
         
         deltas = policy_sample(policy_model, policy_diffusion,
                     policy_obs, goal_obs,
-                    context_poses[:, :policy_context_size], 
+                    curr_poses[:, -policy_context_size:], 
                     policy_pred_horizon, policy_action_dim, device) # B, 8, 48
         delta_accum[:, w] = deltas
+        
+        new_poses = get_action_smpl_torch(curr_poses[:, -1:], deltas, XSensConstants.upper_body_num_parts) # B, 8, 48
+        new_poses[:, :, :6] = torch.zeros_like(new_poses[:, :, :6]) # set root (pelvis) pose to 0s
+        curr_poses = torch.cat([curr_poses[:, new_poses.shape[1]:], new_poses], dim=1)
     
         if skip_last_peva and w == W-1:
             continue 
