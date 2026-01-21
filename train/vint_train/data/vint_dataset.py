@@ -49,6 +49,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         goals_per_obs: int = 1,
         normalize: bool = True,
         obs_type: str = "png",
+        waypoint_mask_prob: Optional[str] = None,
     ):
         """
         Main ViNT dataset class
@@ -75,6 +76,7 @@ class ViNT_Nymeria_Dataset(Dataset):
             goals_per_obs (int): Number of goals to sample per observation
             normalize (bool): Whether to normalize the distances or actions
             obs_type (str): What data type to use for the observation. The only one supported is "image" for now.
+            waypoint_mask_prob (str): Type of waypoint masking. Can be "uniform" or None
         """
         self.data_folder = data_folder
         self.data_split_folder = data_split_folder
@@ -111,6 +113,9 @@ class ViNT_Nymeria_Dataset(Dataset):
         self.normalize = normalize
         self.obs_type = obs_type
         self.preserve_pose_up_down = preserve_pose_up_down
+        self.waypoint_mask_prob = waypoint_mask_prob
+        if self.waypoint_mask_prob is not None:
+            assert self.goal_type in ["draw", "2d", "2d5050"], "waypoint_mask_prob requires a goal_type that uses waypoints"
 
         # load data/data_config.yaml
         with open(
@@ -430,6 +435,17 @@ class ViNT_Nymeria_Dataset(Dataset):
         if "xsens_offsets" in curr_traj_data:
             ret_dict["xsens_offsets"] = torch.as_tensor(curr_traj_data["xsens_offsets"], dtype=torch.float32)
         
+        if self.goal_type in ["2d", "2d5050", "draw"]:
+            if self.waypoint_mask_prob is "uniform":
+                do_mask = torch.rand(1) < 0.5
+                if do_mask:
+                    num_mask = np.random.randint(1, 5)
+                    masked_indices = np.random.choice(4, num_mask, replace=False)
+                    for idx, part_idx in enumerate([XSensConstants.part_names.index(part_name) for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]):
+                        if idx in masked_indices:
+                            ret_dict["goal_image_coords"][idx] = torch.tensor([-1, -1])
+                    image_coords = ret_dict["goal_image_coords"]
+            
         if self.goal_type == "point": # late fusion semi "cheat" model
             if False: #"xsens_offsets" in curr_traj_data:
                 xsens_offsets = curr_traj_data["xsens_offsets"]

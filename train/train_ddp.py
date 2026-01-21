@@ -144,6 +144,7 @@ def main(rank, world_size, config):
                     goals_per_obs=data_config["goals_per_obs"],
                     normalize=config["normalize"],
                     gaussian_normalization_stats_path=data_config["gaussian_normalization_stats_path"],
+                    waypoint_mask_prob=config.get('waypoint_mask_prob', None),
                 )
                 
                 if data_config.get("repeat", 1) > 1:
