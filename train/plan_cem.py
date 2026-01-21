@@ -177,6 +177,17 @@ def main(args):
         if args.num_samples_to_plan > 0 and count > args.num_samples_to_plan: break
         
         
+MODEL_DIRECTORY={
+    "draw": (
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2025_12_09_11_24:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw/config.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2025_12_09_11_24:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw/ema_9.pth"
+    ),
+    "gravity": (
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2025_12_18_11_47:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-preserveUpDown/config.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2025_12_18_11_47:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-preserveUpDown/ema_9.pth"
+    )
+}
+        
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     
@@ -203,9 +214,16 @@ if __name__ == "__main__":
     parser.add_argument("--peva_context_size", type=int, default=15, help="PEVA context size")
     parser.add_argument("--peva_diffusion_steps", type=int, default=250, help="PEVA diffusion steps")
     
-    parser.add_argument("--nomad_config", type=str, default="/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2025_12_09_11_24:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw/config.yaml")
-    parser.add_argument("--nomad_checkpoint", type=str, default="/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2025_12_09_11_24:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw/ema_9.pth")
+    parser.add_argument("--nomad_model", type=str, default="draw", choices=["draw", "gravity"])
+    parser.add_argument("--nomad_config", type=str, default=None)
+    parser.add_argument("--nomad_checkpoint", type=str, default=None)
     
     args = parser.parse_args()
+    
+    if args.nomad_model is not None:
+        assert args.nomad_config is None and args.nomad_checkpoint is None
+        args.nomad_config, args.nomad_checkpoint = MODEL_DIRECTORY[args.nomad_model]
+    else:
+        assert args.nomad_config is not None and args.nomad_checkpoint is not None
     
     main(args)
