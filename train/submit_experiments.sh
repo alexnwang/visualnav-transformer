@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 01/21/2026 run with waypoint masking
+./submit_scripts/submit_fangtooth.sh config/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask.yaml 8
+
 # 12/17/2025 run with preserve updown
 # ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-preserveUpDown.yaml 4
 
