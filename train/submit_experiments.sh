@@ -1,7 +1,14 @@
 #!/bin/bash
 
+# 01/22/2026 run without waypoint masking
+./submit_scripts/submit_torch.sh config/torch/submission-base.yaml 4
+./submit_scripts/submit_torch.sh config/torch/submission-base-architecture.yaml 4
+# leave this one to run elsewhere
+# ./submit_scripts/submit_torch.sh config/torch/submission-base-architecture-proprioception.yaml 4
+./submit_scripts/submit_fangtooth.sh config/submission-base-architecture-proprioception.yaml 8
+
 # 01/21/2026 run with waypoint masking
-./submit_scripts/submit_fangtooth.sh config/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask.yaml 8
+# ./submit_scripts/submit_fangtooth.sh config/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask.yaml 8
 
 # 12/17/2025 run with preserve updown
 # ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-preserveUpDown.yaml 4
