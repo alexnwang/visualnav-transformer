@@ -416,6 +416,9 @@ class ViNT_Nymeria_Dataset(Dataset):
         image_coords = rotated_image_coords
 
         ret_dict = {
+            "dataset_index": i,
+            "dataset_track": f_curr,
+            "dataset_track_index": curr_time,
             "obs_image_transformed": obs_image_transformed.type(torch.float32),
             "goal_image_transformed": goal_image_transformed.type(torch.float32),
             "deltas": deltas_torch.type(torch.float32),
@@ -436,7 +439,7 @@ class ViNT_Nymeria_Dataset(Dataset):
             ret_dict["xsens_offsets"] = torch.as_tensor(curr_traj_data["xsens_offsets"], dtype=torch.float32)
         
         if self.goal_type in ["2d", "2d5050", "draw"]:
-            if self.waypoint_mask_prob is "uniform":
+            if self.waypoint_mask_prob == "uniform":
                 do_mask = torch.rand(1) < 0.5
                 if do_mask:
                     num_mask = np.random.randint(1, 5)
