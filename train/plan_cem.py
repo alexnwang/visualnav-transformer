@@ -6,12 +6,13 @@ import yaml
 import copy
 import wandb
 import json
+import random
 
 import numpy as np
 from torchvision import transforms
 from dreamsim import dreamsim
 from scipy.spatial.transform import Rotation as R
-from torch.utils.data import RandomSampler, DataLoader
+from torch.utils.data import DistributedSampler, RandomSampler, DataLoader
 from diffusers.models import AutoencoderKL
 
 from peva.models import CDiT_models
@@ -24,9 +25,11 @@ from planning.wrappers import EvaluatorPeva, EvaluatorWaypoint, ObjectiveDreamSI
 
 from torchvision.utils import save_image
 
-def build_peva_cem(args, wandb_run, log_dir):
-    policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device='cuda')
-    model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device='cuda',
+from train_ddp import init_distributed
+
+def build_peva_cem(args, wandb_run, log_dir, device):
+    policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device=device)
+    model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device=device,
                                                                 inference_context_size=args.peva_context_size,
                                                                 diffusion_steps=args.peva_diffusion_steps)
     
@@ -36,7 +39,7 @@ def build_peva_cem(args, wandb_run, log_dir):
     evaluator = EvaluatorPeva(model, peva_diffusion, vae, peva_stats,
                     nomad_config["image_size"][0], peva_config["context_size"],
                     num_eval_samples=args.num_eval_samples)
-    objective_fn = ObjectiveDreamSIM(pred_horizon=args.horizon, device="cuda", return_metric=args.use_leafxyz_as_cost)
+    objective_fn = ObjectiveDreamSIM(pred_horizon=args.horizon, device=device, return_metric=args.use_leafxyz_as_cost)
     preprocessor = Preprocessor()
     cem_planner = CEMPlanner(
         horizon=args.horizon,
@@ -55,9 +58,9 @@ def build_peva_cem(args, wandb_run, log_dir):
     )
     return cem_planner, nomad_config, peva_config
 
-def build_waypoint_cem(args, wandb_run, log_dir,):
-    policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device='cuda')
-    model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device='cuda',
+def build_waypoint_cem(args, wandb_run, log_dir, device):
+    policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device=device)
+    model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device=device,
                                                                 inference_context_size=args.peva_context_size,
                                                                 diffusion_steps=args.peva_diffusion_steps)
     
@@ -69,7 +72,7 @@ def build_waypoint_cem(args, wandb_run, log_dir,):
                     nomad_config["image_size"][0], peva_config["context_size"], nomad_config["context_size"]+1,
                     nomad_config["len_traj_pred"], nomad_config["input_dims"],
                     num_eval_samples=args.num_eval_samples)
-    objective_fn = ObjectiveDreamSIM(pred_horizon=nomad_config["len_traj_pred"], device="cuda", return_metric=args.use_leafxyz_as_cost)
+    objective_fn = ObjectiveDreamSIM(pred_horizon=nomad_config["len_traj_pred"], device=device, return_metric=args.use_leafxyz_as_cost)
     preprocessor = Preprocessor()
     cem_planner = CEMPlanner(
         horizon=args.horizon,
@@ -89,6 +92,20 @@ def build_waypoint_cem(args, wandb_run, log_dir,):
     return cem_planner, nomad_config, peva_config
 
 def main(args):
+    # Set random seed for reproducibility
+    seed = 42
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    
+    world_size, rank, gpu, is_distributed = init_distributed()
+    print(f"Rank: {rank}, World size: {world_size}, GPU: {gpu}, Is distributed: {is_distributed}")
+    torch.cuda.set_device(gpu)
+    
     algo = args.algo
     
     datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
@@ -102,23 +119,42 @@ def main(args):
     if args.no_wandb or args.test:
         wandb_run = None
     else:
-        wandb_run = wandb.init(project="peva-planning", name=track_idx_name)
+        # Only initialize wandb from rank 0 in distributed setting
+        if is_distributed and rank != 0:
+            wandb_run = None
+        else:
+            wandb_run = wandb.init(project="peva-planning", name=track_idx_name)
     
     log_dir = f"logs/cem/{datetime_str}:{track_idx_name}"
-    os.makedirs(log_dir, exist_ok=True)
+    # Only create log directory from rank 0 to avoid race conditions
+    if not is_distributed or rank == 0:
+        os.makedirs(log_dir, exist_ok=True)
+    # Synchronize all processes before proceeding
+    if is_distributed:
+        torch.distributed.barrier()
     
     # load models
+    device = f'cuda:{gpu}' if is_distributed else 'cuda'
     if algo == "waypoint": 
         action_init = torch.ones(1, args.horizon, 8) * 0.5
-        cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir)
+        cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir, device)
     elif algo == "peva":
         action_init = None
-        cem_planner, nomad_config, peva_config = build_peva_cem(args, wandb_run, log_dir)
+        cem_planner, nomad_config, peva_config = build_peva_cem(args, wandb_run, log_dir, device)
         
     # prepare dataset
     shuffle = False
-    dataset = get_nymeria_dataset(nomad_config, context_size=args.peva_context_size-1, goal_timestep_offset=args.goal_timestep_offset)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=shuffle, num_workers=1)
+    dataset = get_nymeria_dataset(nomad_config, context_size=max(args.peva_context_size-1, nomad_config["context_size"]), goal_timestep_offset=args.goal_timestep_offset)
+    if is_distributed:
+        sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle, seed=seed)
+        dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=1)
+    else:
+        if shuffle:
+            generator = torch.Generator()
+            generator.manual_seed(seed)
+            dataloader = DataLoader(dataset, batch_size=1, shuffle=shuffle, num_workers=1, generator=generator)
+        else:
+            dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)
     
     count = 0
     curr_track, curr_index = None, None

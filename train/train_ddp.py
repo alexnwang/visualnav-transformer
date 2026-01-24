@@ -63,6 +63,7 @@ def init_distributed(port=37124, rank_and_world_size=(None, None)):
             print('SLURM vars not set')
     
     else:
+        return 1, 0, 0, False
         rank = 0
         world_size = 1
         gpu = 0
