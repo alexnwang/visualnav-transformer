@@ -144,7 +144,7 @@ def main(rank, world_size, config):
                     goals_per_obs=data_config["goals_per_obs"],
                     normalize=config["normalize"],
                     gaussian_normalization_stats_path=data_config["gaussian_normalization_stats_path"],
-                    waypoint_mask_prob=config.get('waypoint_mask_prob', None),
+                    waypoint_mask_prob=config.get('waypoint_mask_prob', None) if data_split_type == "train" else None,
                 )
                 
                 if data_config.get("repeat", 1) > 1:
@@ -322,13 +322,16 @@ def main(rank, world_size, config):
         print("Loading model from ", load_project_folder)
         latest_path = os.path.join(load_project_folder, "latest.pth")
         latest_checkpoint = torch.load(latest_path, map_location=device)
-        load_model(model.module, config["model_type"], latest_checkpoint)  # Use model.module for DDP
+        if "module" in [x for x in latest_checkpoint.keys()][0]:
+            msg = load_model(model, config["model_type"], latest_checkpoint)  # Use model.module for DDP
+        else:
+            msg = load_model(model.module, config["model_type"], latest_checkpoint)
         if "epoch" in latest_checkpoint:
             current_epoch = latest_checkpoint["epoch"] + 1
         else:
             epochs = [x for x in os.listdir(load_project_folder) if "epoch_" in x]
             current_epoch = max(int(epoch.split("_")[-1]) for epoch in epochs)
-        print(f"Loaded model from epoch {current_epoch}")
+        print(f"Loaded model from epoch {current_epoch} with message: {msg}")
 
         if "optimizer" in latest_checkpoint:
             optimizer.load_state_dict(latest_checkpoint["optimizer"].state_dict())

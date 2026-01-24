@@ -140,7 +140,7 @@ def train_nomad(
     else:
         tepoch = dataloader
     for i, data in enumerate(tepoch):
-        batch_obs_images = data["obs_image_transformed"].to(device, non_blocking=True)          # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
+        batch_obs_images = data["obs_image_transformed"].to(device, non_blocking=True)          # batch_obs_images_transformed shape: torch.Size([256, (context_size+1), 3, *image_size])
         batch_goal_images = data["goal_image_transformed"].to(device, non_blocking=True)        # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
         deltas = data["deltas"]                                                                 # actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
         context_poses = data["context_poses"].to(device, non_blocking=True)                     # context_poses shape: torch.Size([256, context_size+1, 45]) # context poses
@@ -404,7 +404,7 @@ def evaluate_nomad(
         tepoch = itertools.islice(dataloader, num_batches)
         
     for i, data in enumerate(tepoch):
-        batch_obs_images = data["obs_image_transformed"].to(device, non_blocking=True)          # batch_obs_images_transformed shape: torch.Size([256, (context_size+1) * 3, *image_size])
+        batch_obs_images = data["obs_image_transformed"].to(device, non_blocking=True)          # batch_obs_images_transformed shape: torch.Size([256, (context_size+1), 3, *image_size])
         batch_goal_images = data["goal_image_transformed"].to(device, non_blocking=True)        # batch_goal_images_transformed shape: torch.Size([256, 3, *image_size])
         deltas = data["deltas"]                                                                 #  actions shape: torch.Size([256, 8, 48]) # 8 actions, each with 48 dimensions
         context_poses = data["context_poses"].to(device, non_blocking=True)                     # context_poses shape: torch.Size([256, context_size+1, 45]) # context poses
@@ -440,12 +440,19 @@ def evaluate_nomad(
         else:
             # goal_pose = gt_actions_with_initial[:, 0]
             goal_pose = goal_pos[:, 0]
-
-        rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+            
+        # fix masking for waypoint_masking setting
+        # instead of setting masking by the goal_mask, set the goal images (to the goal if unmasked, to the latest obs if masked)
+        if config.get("waypoint_masking", None) == "uniform":
+            rand_goals_binary = torch.rand((B,), device=device) < 0.5
+            rand_mask_goal_images = torch.where(rand_goals_binary[:, None, None, None], batch_obs_images[:, -1], batch_goal_images)
+            rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=rand_mask_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+            goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_obs_images[:, -1], input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+        else:
+            rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+            goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
 
         obsgoal_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
-        obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
-        goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
 
         # Sample noise to add to actions
         noise = torch.randn(naction.shape, device=device)
@@ -511,6 +518,7 @@ def evaluate_nomad(
             num_samples=1,
             device=device,
             goal_coordinates=goal_coordinates,
+            waypoint_masking=config.get("waypoint_masking", None),
         )
         model_output_dict["gc_actions"] = unnormalize_data_smpl_pose_gaussian(
             model_output_dict["gc_actions"].flatten(0, 1)
@@ -624,23 +632,23 @@ def model_output(
     num_samples: int,
     device: torch.device,
     goal_coordinates: torch.Tensor = None,
+    waypoint_masking: Optional[str] = None,
 ):
     """
     Generate model output (conditioned, unconditioned, distance) for the given batch of images.
     Outputs are DELTAS and are NOT unnormalized or scaled.
     """
-    goal_mask = torch.ones((batch_goal_images.shape[0],)).long().to(device)
-    obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
-    # obs_cond = obs_cond.flatten(start_dim=1)
-    obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
-
     no_mask = torch.zeros((batch_goal_images.shape[0],)).long().to(device)
+    goal_mask = torch.ones((batch_goal_images.shape[0],)).long().to(device)
+    
+    if waypoint_masking == "uniform":
+        obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_obs_images[:, -1], input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+    else:
+        obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+    obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
+    
     obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
-    
-    # obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
     gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
-    
-    # obsgoal_cond = obsgoal_cond.flatten(start_dim=1)  
     obsgoal_cond = obsgoal_cond.repeat_interleave(num_samples, dim=0)
 
     # initialize action from Gaussian noise
