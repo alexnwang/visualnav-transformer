@@ -11,6 +11,29 @@ def move_to_device(dct, device):
             dct[key] = value.to(device)
     return dct
 
+def get_best_from_dict_list(metric_dict_list: list[dict]):
+    keys = metric_dict_list[0].keys()
+    best_metrics_dict = {k: float('inf') for k in keys}
+    for metric_dict in metric_dict_list:
+        for key in keys:
+            if "min-" in key:
+                continue
+            if metric_dict[key] < best_metrics_dict[key]:
+                best_metrics_dict[key] = metric_dict[key]
+                if f"min-{key}" in metric_dict:
+                    best_metrics_dict[f"min-{key}"] = metric_dict[f"min-{key}"]
+    return best_metrics_dict
+
+def get_average_from_dict_list(dict_list: list[dict]):
+    keys = dict_list[0].keys()
+    average_dict = {k: 0.0 for k in keys}
+    for dict in dict_list:
+        for key in keys:
+            average_dict[key] += dict[key]
+    for key in keys:
+        average_dict[key] /= len(dict_list)
+    return average_dict
+
 class CEMPlanner(BasePlanner):
     def __init__(
         self,
@@ -27,11 +50,6 @@ class CEMPlanner(BasePlanner):
         evaluator,
         wandb_run,
         log_dir="logs/cem",
-        metric_keys=["xyz_distance",
-                     "visible_xyz_distance",
-                     "gt_waypoint-xyz_distance",
-                     "no_waypoint-xyz_distance",
-                     "start_xyz_distance"],
         **kwargs,
     ):
         """
@@ -70,15 +88,11 @@ class CEMPlanner(BasePlanner):
         
         os.makedirs(log_dir, exist_ok=True)
         
-        self.metric_keys = metric_keys
         self.accum_metrics = defaultdict(list)
         
-    def store_metrics(self, metrics):
-        for k, v in metrics.items():
-            self.accum_metrics[k].append(v)
-    
-    def get_average_metrics(self, prefix=""):
-        return {f"{prefix}{k}": np.mean(v) for k, v in self.accum_metrics.items()}
+        self.accum_objective_metric_dicts = {}
+        self.accum_eval_metric_dicts = {}
+        self.accum_eval_other_vals = {}
 
     def init_mu_sigma(self, obs_0, actions=None):
         """
@@ -99,6 +113,53 @@ class CEMPlanner(BasePlanner):
             new_mu = torch.zeros(n_evals, remaining_t, self.action_dim)
             mu = torch.cat([mu, new_mu.to(device)], dim=1)
         return mu, sigma
+        
+    def aggregate_metrics_ddp(self, metrics_dict):
+        """
+        Aggregate metrics dictionaries across all DDP workers.
+        If multiple workers share the same key, the values are average. 
+        If only one worker has a key, the value stays as it was found in that worker.
+        
+        Args:
+            metrics_dict: Dictionary with metric keys and values (numbers or scalar tensors)
+            
+        Returns:
+            Combined dictionary with averaged values across all workers
+        """
+        if not torch.distributed.is_initialized():
+            return metrics_dict
+        # Gather dictionaries from all workers
+        world_size = torch.distributed.get_world_size()
+        all_metrics_list = [None for _ in range(world_size)]
+        torch.distributed.all_gather_object(all_metrics_list, metrics_dict)
+        # Collect all unique keys from all workers
+        all_keys = set()
+        for worker_metrics in all_metrics_list:
+            if worker_metrics is not None:
+                all_keys.update(worker_metrics.keys())
+        # Combine dictionaries by averaging values
+        combined_metrics = {}
+        for key in all_keys:
+            values = []
+            for worker_metrics in all_metrics_list:
+                if worker_metrics is not None and key in worker_metrics:
+                    value = worker_metrics[key]
+                    # Convert to float: handle numbers or scalar tensors
+                    if isinstance(value, (int, float, np.number)):
+                        values.append(float(value))
+                    elif isinstance(value, torch.Tensor):
+                        if value.numel() == 1:
+                            values.append(value.item())
+                        else:
+                            raise ValueError(f"Expected scalar tensor for key '{key}', got tensor with shape {value.shape}")
+                    else:
+                        raise TypeError(f"Expected number or scalar tensor for key '{key}', got {type(value)}")
+            # Average the values
+            if len(values) > 0:
+                combined_metrics[key] = np.mean(values)
+            else:
+                combined_metrics[key] = metrics_dict.get(key, 0.0)
+        return combined_metrics
 
     def plan(self, obs_0, obs_g, task_name, actions=None):
         """
@@ -117,7 +178,9 @@ class CEMPlanner(BasePlanner):
         mu, sigma = self.init_mu_sigma(obs_0, actions)
         mu, sigma = mu.to(self.device), sigma.to(self.device)
 
-        best_eval_metrics = {k: float('inf') for k in self.metric_keys}
+        self.accum_objective_metric_dicts[task_name] = []
+        self.accum_eval_metric_dicts[task_name] = []
+        self.accum_eval_other_vals[task_name] = []
         
         for i in range(self.opt_steps):
             # optimize individual instances
@@ -154,22 +217,52 @@ class CEMPlanner(BasePlanner):
             mu = topk_action.mean(dim=0, keepdim=True)
             sigma = topk_action.std(dim=0, keepdim=True)
 
+            self.accum_objective_metric_dicts[task_name].append({**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1})
+            log_dict = {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}    
             if self.wandb_run is not None:
-                self.wandb_run.log(
-                    {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}, commit=False
-                )
+                self.wandb_run.log(log_dict, commit=False)
+                
             if self.evaluator is not None and i % self.eval_every == 0:
                 metrics, other_vals = self.evaluator.eval_actions(i, mu, trans_obs_0, z_obs_g, save_path=f"{self.log_dir}/{task_name}")
-                logs_tagged = {f"{task_name}/{k}": v for k, v in {**metrics, **other_vals}.items()}
+                self.accum_eval_metric_dicts[task_name].append(metrics)
+                self.accum_eval_other_vals[task_name].append(other_vals)
+                
+                # tag the metrics with the present task name
+                logs_tagged = {f"eval/{k}": v for k, v in {**metrics, **other_vals}.items()}
                 logs_tagged.update({"step": i + 1})
+                # aggregate the metrics across all workers
                 if self.wandb_run is not None:
                     self.wandb_run.log(logs_tagged, commit=True)
-                
-                for key in self.metric_keys:
-                    if key in metrics and metrics[key] < best_eval_metrics[key]:
-                        best_eval_metrics[key] = metrics[key]
-        self.store_metrics(best_eval_metrics)
-        log_metrics_dict = {f"active/{k}": v[-1] for k, v in self.accum_metrics.items()}
-        log_metrics_dict.update({f"accum/{k}": np.mean(v) for k, v in self.accum_metrics.items()})
-        self.wandb_run.log(log_metrics_dict, commit=True)
+        active_metrics_dict = get_best_from_dict_list(self.accum_eval_metric_dicts[task_name])
+        active_other_vals_dict = get_average_from_dict_list(self.accum_eval_other_vals[task_name])
+        if self.wandb_run is not None:
+            self.wandb_run.log(
+                {f"active/{k}": v for k, v in {**active_metrics_dict, **active_other_vals_dict}.items()}, commit=False
+            )
+    
+        for k_steps in range(1, self.opt_steps + 1):
+            accum_dict = {}
+            for task_name in self.accum_eval_metric_dicts.keys():
+                accum_metrics_dict_for_task = get_best_from_dict_list(self.accum_eval_metric_dicts[task_name][:k_steps])
+                accum_other_vals_dict_for_task = get_average_from_dict_list(self.accum_eval_other_vals[task_name][:k_steps])
+                for k, v in accum_metrics_dict_for_task.items():
+                    if k not in accum_dict:
+                        accum_dict[k] = []
+                    accum_dict[k].append(v)
+                for k, v in accum_other_vals_dict_for_task.items():
+                    if k not in accum_dict:
+                        accum_dict[k] = []
+                    accum_dict[k].append(v)
+            if self.wandb_run is not None:
+                tag = f"accum{k_steps}"
+                self.wandb_run.log(
+                    {f"{tag}/{k}": np.mean(v) for k, v in accum_dict.items()}, commit=False
+                )
+        if self.wandb_run is not None:
+            self.wandb_run.log({}, commit=True)
+
+        # dump all the accumulated metrics and other values
+        torch.save(self.accum_objective_metric_dicts, f"{self.log_dir}/accum_objective_metric_dicts.pth")
+        torch.save(self.accum_eval_metric_dicts, f"{self.log_dir}/accum_eval_metric_dicts.pth")
+        torch.save(self.accum_eval_other_vals, f"{self.log_dir}/accum_eval_other_vals.pth")
         return mu

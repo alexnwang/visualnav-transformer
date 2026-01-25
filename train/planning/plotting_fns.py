@@ -24,7 +24,7 @@ def save_topk_plot(x, y, lines, x_label, y_label, filename, k=0):
     plt.savefig(filename)
     plt.close()
         
-def save_rollout_images(context_images, pred_images, waypoint_annotated_images, goal_image, save_paths, pred_len=None): 
+def save_rollout_images(context_images, pred_images, waypoint_annotated_images, goal_image, gt_goal_image, save_paths, pred_len=None): 
     """
     
     Args:
@@ -32,6 +32,7 @@ def save_rollout_images(context_images, pred_images, waypoint_annotated_images, 
         pred_images: B, W*policy_pred_horizon, 3, H, W
         waypoint_annotated_images: B, W, 3, H, W
         goal_image: B, 3, H, W
+        gt_goal_image: B, 3, H, W
         save_paths: list of strings, each string is the path to save the image of length B
     """    
     os.makedirs(os.path.dirname(save_paths[0]), exist_ok=True)
@@ -53,7 +54,8 @@ def save_rollout_images(context_images, pred_images, waypoint_annotated_images, 
     image_list = [
         context_images, torch.zeros(B, max_len-a, C, H, Wimg, device=device), # B, max_len, 3, H, W
         pred_images, torch.zeros(B, max_len-b, C, H, Wimg, device=device), # B, max_len, 3, H, W
-        goal_image[:, None] # B, 1, 3, H, W
+        goal_image[:, None], # B, 1, 3, H, W
+        gt_goal_image[:, None], # B, 1, 3, H, W
     ]
     image = torch.cat(image_list, dim=1) # B, 2*max_len+1, C,  H, W
     for b in range(image.shape[0]):

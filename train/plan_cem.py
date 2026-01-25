@@ -18,7 +18,9 @@ from diffusers.models import AutoencoderKL
 from peva.models import CDiT_models
 from peva.diffusion import create_diffusion
 
-from vint_train.data.misc import XSensConstants
+from vint_train.training.nymeria_training_utils import get_action_smpl_torch
+from vint_train.data.misc import XSensConstants, XsensSkeleton
+from planning.utils import _compute_pose_and_loss, _compute_part_distance_matrices
 from planning.cem import CEMPlanner
 from planning.utils import get_nymeria_dataset, load_peva, load_policy
 from planning.wrappers import EvaluatorPeva, EvaluatorWaypoint, ObjectiveDreamSIM, PevaWM, Preprocessor, WaypointWM
@@ -101,41 +103,37 @@ def main(args):
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-    
-    world_size, rank, gpu, is_distributed = init_distributed()
-    print(f"Rank: {rank}, World size: {world_size}, GPU: {gpu}, Is distributed: {is_distributed}")
+    rank = args.rank
+    world_size = args.world_size
+    gpu = rank % torch.cuda.device_count()
+    # world_size, rank, gpu, is_distributed = init_distributed()
+    print(f"NOT TRUE DISTRIBUTED THIS IS USED FOR DATALOADING ONLY -- Rank: {rank}, World size: {world_size}")
     torch.cuda.set_device(gpu)
     
     algo = args.algo
     
     datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    track_idx_name = f"{algo}_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
+    run_name = f"{algo}_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
     if args.use_leafxyz_as_cost:
-        track_idx_name = "CHEATMETRIC_leafxyz_as_cost" + track_idx_name
+        run_name = "CHEATMETRIC_leafxyz_as_cost" + run_name
     if args.goal_timestep_offset is not None:
-        track_idx_name = track_idx_name + f"-gt{args.goal_timestep_offset}"
+        run_name = run_name + f"-gt{args.goal_timestep_offset}"
+    if world_size > 1:
+        run_name = run_name + f"-rank:ws-{rank}:{world_size}"
     if args.test:
-        track_idx_name = "test" + track_idx_name
+        run_name = "test" + run_name
     if args.no_wandb or args.test:
         wandb_run = None
     else:
-        # Only initialize wandb from rank 0 in distributed setting
-        if is_distributed and rank != 0:
-            wandb_run = None
-        else:
-            wandb_run = wandb.init(project="peva-planning", name=track_idx_name)
+        wandb_run = wandb.init(project="peva-planning", name=run_name)
     
-    log_dir = f"logs/cem/{datetime_str}:{track_idx_name}"
+    log_dir = f"logs/cem/{datetime_str}:{run_name}"
     # Only create log directory from rank 0 to avoid race conditions
-    if not is_distributed or rank == 0:
-        os.makedirs(log_dir, exist_ok=True)
-    # Synchronize all processes before proceeding
-    if is_distributed:
-        torch.distributed.barrier()
+    os.makedirs(log_dir, exist_ok=True)
     
     # load models
-    device = f'cuda:{gpu}' if is_distributed else 'cuda'
-    if algo == "waypoint": 
+    device = 'cuda'
+    if algo in "waypoint": 
         action_init = torch.ones(1, args.horizon, 8) * 0.5
         cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir, device)
     elif algo == "peva":
@@ -143,18 +141,11 @@ def main(args):
         cem_planner, nomad_config, peva_config = build_peva_cem(args, wandb_run, log_dir, device)
         
     # prepare dataset
-    shuffle = False
+    shuffle = args.shuffle
     dataset = get_nymeria_dataset(nomad_config, context_size=max(args.peva_context_size-1, nomad_config["context_size"]), goal_timestep_offset=args.goal_timestep_offset)
-    if is_distributed:
-        sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle, seed=seed)
-        dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=1)
-    else:
-        if shuffle:
-            generator = torch.Generator()
-            generator.manual_seed(seed)
-            dataloader = DataLoader(dataset, batch_size=1, shuffle=shuffle, num_workers=1, generator=generator)
-        else:
-            dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle, seed=seed)
+    dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=1)
+    
     
     count = 0
     curr_track, curr_index = None, None
@@ -165,9 +156,21 @@ def main(args):
 
         deltas = batch["deltas"] # 1, horizon, action_dim
         first_pose = batch["first_pose"] # 1, 1, 48
-        xsens_offsets = batch["xsens_offsets"] # 15, 3
+        xsens_offsets = batch["xsens_offsets"] # 1, 15, 3
         goal_obs = batch["goal_obs"] # 1, 3, H, W
         goal_image_coords = batch["goal_image_coords"] # 1, 23, 2
+        
+        dataset_index = batch["dataset_index"].item()
+        track, track_index = batch["dataset_track"][0], batch["dataset_track_index"].item()
+        track_idx_name = f"{track}-{track_index}"
+        
+        skel = XsensSkeleton(xsens_offsets[0])
+        gt_actions = get_action_smpl_torch(first_pose, deltas, XSensConstants.upper_body_num_parts) # B, T, 48
+        xyz_dist_matrix, _, init_xyz, _ = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
+        visible_plus_head = (goal_image_coords != -1).all(dim=-1)[:, :XSensConstants.upper_body_num_parts] # B, num_parts
+        visible_plus_head[:, XSensConstants.part_names.index("Head")] = True
+        init_visible_plus_head = xyz_dist_matrix[:, XSensConstants.leaf_indices] * visible_plus_head[:, XSensConstants.leaf_indices]
+        init_visible_plus_head = (init_visible_plus_head.sum() / visible_plus_head.sum()).item()
         
         if not args.keep_nonvisible_goal:
             visible = False
@@ -176,26 +179,28 @@ def main(args):
                 index = XSensConstants.part_names.index(part)
                 if all(goal_image_coords[0, index] != -1):
                     find_count += 1
-                    if find_count >=3:
+                    if find_count > 0:
                         visible = True
                         break
             if not visible:
+                print(f"No visible parts in {track_idx_name}")
                 continue
-        assert shuffle == False, "shuffle must be False for dataloader"
-        track, track_index, _ = dataloader.dataset.index_to_data[idx]
-        track_idx_name = f"{track}-{track_index}"
+            
+        if init_visible_plus_head < args.min_dist_threshold:
+            print(f"Initial distance of visible + head joints is less than {args.min_dist_threshold} in {track_idx_name}")
+            continue
         
-        if curr_track == track and idx - curr_index < args.min_index_goal:
+        if curr_track == track and dataset_index - curr_index < args.min_index_goal:
             continue
         curr_track = track
-        curr_index = idx
+        curr_index = dataset_index
         
         print("="*50)
         print(f"Planning {track_idx_name}")
         
         # visualize the context and goal images
         os.makedirs(f"{log_dir}/{track_idx_name}")
-        save_img = torch.cat([obs_images, torch.zeros_like(obs_images[:, :-1]), goal_image[None]], dim=1)[0]
+        save_img = torch.cat([obs_images, goal_obs[None],torch.zeros_like(obs_images[:, :-2]), goal_image[None]], dim=1)[0]
         save_image(save_img, f"{log_dir}/{track_idx_name}/context_and_goal.png", nrow=obs_images.shape[1])
         
             
@@ -222,7 +227,7 @@ MODEL_DIRECTORY={
         "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2025_12_18_11_47:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-preserveUpDown/config.yaml",
         "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2025_12_18_11_47:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-preserveUpDown/ema_9.pth"
     ),
-    "waypoint_mask": (
+    "draw_mask": (
         "/home/anw2067/visualnav-transformer/train/config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask.yaml",
         "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_01_21_06_54:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask/ema_9.pth"
     )
@@ -234,6 +239,7 @@ if __name__ == "__main__":
     parser.add_argument("-a", "--algo", type=str, choices=["peva", "waypoint"], default="waypoint", help="Planning algorithm")
     parser.add_argument("--use_leafxyz_as_cost", action='store_true', help="Uses the metric(leaf-xyz) instead of a normal cost_fn")
     parser.add_argument("--goal_timestep_offset", type=int, default=None, help="Goal timestep offset")
+    parser.add_argument("--shuffle", action="store_true", help="Shuffle the dataset")
     
     parser.add_argument("-n", "--num_samples", type=int, default=32, help="Number of samples")
     parser.add_argument("-t", "--topk", type=int, default=4, help="Top k samples")
@@ -244,7 +250,8 @@ if __name__ == "__main__":
     parser.add_argument("-N", "--num_eval_samples", type=int, default=1, help="Number of evaluation samples")
     
     parser.add_argument("--keep_nonvisible_goal", action="store_true", help="Keep non-visible goal in the dataset")
-    parser.add_argument("--min_index_goal", type=int, default=80, help="Minimum index of the goal to plan")
+    parser.add_argument("--min_index_goal", type=int, default=0, help="Minimum index of the goal to plan")
+    parser.add_argument("--min_dist_threshold", type=float, default=0.1, help="Minimum distance threshold")
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")
     parser.add_argument("--no_wandb", action="store_true", help="Don't use wandb")
     parser.add_argument("--test", action="store_true", help="Test run")
@@ -254,9 +261,12 @@ if __name__ == "__main__":
     parser.add_argument("--peva_context_size", type=int, default=15, help="PEVA context size")
     parser.add_argument("--peva_diffusion_steps", type=int, default=250, help="PEVA diffusion steps")
     
-    parser.add_argument("--nomad_model", type=str, default="draw", choices=["draw", "gravity"])
+    parser.add_argument("--nomad_model", type=str, default="draw", choices=["draw", "gravity", "draw_mask"])
     parser.add_argument("--nomad_config", type=str, default=None)
     parser.add_argument("--nomad_checkpoint", type=str, default=None)
+    
+    parser.add_argument("--world_size", type=int, default=1, help="World size")
+    parser.add_argument("--rank", type=int, default=0, help="Rank")
     
     args = parser.parse_args()
     

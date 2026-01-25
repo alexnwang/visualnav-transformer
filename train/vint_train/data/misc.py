@@ -234,5 +234,41 @@ class XSensConstants:
             [255, 34, 17],
         ]
     )
-    
-    
+    leaf_parts=[
+        "Pelvis",
+        "Head",
+        "R_Hand",
+        "L_Hand",
+    ]
+    leaf_indices = [
+        0,
+        6,
+        10,
+        14,
+    ]
+    intermediate_parts=[
+        "L5",
+        "L3",
+        "T12",
+        "T8",
+        "Neck",
+        "R_Shoulder",
+        "R_UpperArm",
+        "R_Forearm",
+        "L_Shoulder",
+        "L_UpperArm",
+        "L_Forearm",
+    ]
+    intermediate_indices = [
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        8,
+        9,
+        11,
+        12,
+        13
+    ]

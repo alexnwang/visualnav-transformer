@@ -152,6 +152,7 @@ class ObjectiveDreamSIM:
         gt_deltas = goal_state["deltas"] # B, T, policy_action_dim
         
         curr_obs = state_0["images"] # B, peva_context_size, 3, H, W
+        gt_goal_image = state_0["goal_image"] # B, 3, H, W
         generated_obs = rollout_state["generated_obs"] # B, W*policy_pred_horizon, 3, H, W
         rollout_waypoint_annotated_obs = rollout_state["goal_images"] # B, W, 3, H, W or None 
         
@@ -185,15 +186,20 @@ class ObjectiveDreamSIM:
                            leaf_xyz_init[0].detach().cpu().numpy(),
                            "DreamSIM", "Leaf XYZ Distance", 
                            f"{save_path}/dreamSIM_xyz.png", k=topk)
-            save_rollout_images(curr_obs, generated_obs, rollout_waypoint_annotated_obs, goal_obs,
+            save_rollout_images(curr_obs, generated_obs, rollout_waypoint_annotated_obs, goal_obs, gt_goal_image,
                                      [f"{save_path}/rollout_{i}-leaf_xyz{np.round(leaf_xyz[i].item(), decimals=3)}.png" for i in range(B)],
                                      pred_len=self.pred_horizon)
             
         print(f"ObjectiveFn: {res.mean().item()}")
         if self.return_metric:
-            return leaf_xyz, {"loss": res.mean().item(), "xyz_distance": leaf_xyz.mean().item(), "angular_distance": leaf_ang.mean().item()}
+            return leaf_xyz, {"loss": res.mean().item(),
+                              "objective-xyz_distance": leaf_xyz.mean().item(),
+                              "objective-start_xyz_distance": leaf_xyz_init.mean().item()}
         else:
-            return res, {"loss": res.mean().item(), "xyz_distance": leaf_xyz.mean().item(), "angular_distance": leaf_ang.mean().item()}
+            return res, {"loss": res.mean().item(),
+                         "xyz_distance": leaf_xyz.mean().item(),
+                         "start_xyz_distance": leaf_xyz_init.mean().item(),
+                         "angular_distance": leaf_ang.mean().item()}
     
 class EvaluatorPeva(PevaWM):
     def __init__(self,
@@ -216,11 +222,15 @@ class EvaluatorPeva(PevaWM):
         curr_obs = state_0['images'] # B, peva_context_size, 3, H, W
         goal_obs = state_0['goal_image'] # B, 3, H, W
         
+        gt_goal_image = state_0['goal_image'] # B, 3, H, W
+        
         deltas_gt = state_g["deltas"]
         first_pose = state_g["first_pose"] # B, 1, 48
         goal_image_coords = state_g['goal_image_coords'] # B, 23, 2
         xsens_offsets = state_g["xsens_offsets"][0]
         skel = XsensSkeleton(xsens_offsets)
+        
+        num_joints_visible = (goal_image_coords[:, XSensConstants.leaf_indices] != -1).all(dim=-1).float().sum(dim=-1)
         
         if self.num_eval_samples > 1:
             actions_mu = actions_mu[:, None].repeat(1, self.num_eval_samples, 1, 1).flatten(0, 1)
@@ -238,24 +248,36 @@ class EvaluatorPeva(PevaWM):
         
         (xyz_dist_matrix, ang_dist_matrix, # B, num_parts
          leaf_xyz, leaf_ang) = _compute_part_distance_matrices(pred_actions[:, -1], gt_actions[:, -1], skel)
-        _, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
+        init_xyz_dist_matrix, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
+        
+        intermediate_xyz = xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
+        intermediate_xyz_init = init_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
+        
+        all_xyz = xyz_dist_matrix.mean(dim=-1)
+        all_xyz_init = init_xyz_dist_matrix.mean(dim=-1)
         
         res = {
-            "xyz_distance": leaf_xyz.mean().item(),
-            # "angular_distance": leaf_ang.mean().item(),
-            "min-xyz_distance": leaf_xyz.min().item(),
-            # "min-angular_distance": leaf_ang.min().item(),
-            "start_xyz_distance": leaf_xyz_init.mean().item(),
-            # "start_angular_distance": leaf_ang_init.mean().item(),
+            "leaf_xyz": leaf_xyz.mean().item(),
+            "leaf_xyz_min": leaf_xyz.min().item(),
+            "leaf_xyz_init": leaf_xyz_init.mean().item(),
+            "intermediate_xyz": intermediate_xyz.mean().item(),
+            "intermediate_xyz_min": intermediate_xyz.min().item(),
+            "intermediate_xyz_init": intermediate_xyz_init.mean().item(),
+            "all_xyz": all_xyz.mean().item(),
+            "all_xyz_min": all_xyz.min().item(),
+            "all_xyz_init": all_xyz_init.mean().item(),
+        }
+        other_vals = {
+            "num_joints_visible": num_joints_visible.mean().item()
         }
         pprint({**res})
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
             for i in range(B):
                 leaf_xyz_val_rounded = np.round(leaf_xyz.unflatten(0, (B, -1))[i].mean().item(), decimals=3)
-                save_rollout_images(curr_obs[:1], generated_frames[:1], None, goal_obs[:1],
+                save_rollout_images(curr_obs[:1], generated_frames[:1], None, goal_obs[:1], gt_goal_image[:1],
                                     [f"{save_path}/eval_actions_step{cem_step}_{i}-leaf_xyz{leaf_xyz_val_rounded}.png"])
-        return res, {}
+        return res, other_vals
         
 
 class EvaluatorWaypoint(WaypointWM):
@@ -285,6 +307,8 @@ class EvaluatorWaypoint(WaypointWM):
         context_poses = state_0['context_poses'] # B, peva_context_size, 48
         curr_obs = state_0['images'] # B, peva_context_size, 3, H, W
         goal_obs = state_0['goal_image'] # B, 3, H, W
+        
+        gt_goal_image = state_0['goal_image'] # B, 3, H, W
 
         deltas_gt = state_g["deltas"]
         first_pose = state_g["first_pose"] # B, 1, 48
@@ -292,6 +316,8 @@ class EvaluatorWaypoint(WaypointWM):
         gt_waypoints = goal_image_coords[:, :XSensConstants.upper_body_num_parts][:, leaf_indexer].flatten(1,2)[:, None] # B, 4, 2
         xsens_offsets = state_g["xsens_offsets"][0]
         skel = XsensSkeleton(xsens_offsets)
+        
+        num_joints_visible = (goal_image_coords[:, XSensConstants.leaf_indices] != -1).all(dim=-1).float().sum(dim=-1)
         
         if self.num_eval_samples > 1:
             waypoints = waypoints[:, None].repeat(1, self.num_eval_samples, 1, 1).flatten(0, 1)
@@ -321,9 +347,19 @@ class EvaluatorWaypoint(WaypointWM):
         
         (xyz_dist_matrix, ang_dist_matrix, # B, num_parts
          leaf_xyz, leaf_ang) = _compute_part_distance_matrices(pred_actions[:, -1], gt_actions[:, -1], skel)
-        _, _, leaf_xyz_gt_waypoints, leaf_ang_gt_waypoints = _compute_part_distance_matrices(gt_waypoint_actions[:, -1], gt_actions[:, -1], skel)
-        _, _, leaf_xyz_no_waypoints, leaf_ang_no_waypoints = _compute_part_distance_matrices(no_waypoint_actions[:, -1], gt_actions[:, -1], skel)
-        _, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
+        gt_waypoint_xyz_dist_matrix, _, leaf_xyz_gt_waypoints, leaf_ang_gt_waypoints = _compute_part_distance_matrices(gt_waypoint_actions[:, -1], gt_actions[:, -1], skel)
+        no_waypoint_xyz_dist_matrix, _, leaf_xyz_no_waypoints, leaf_ang_no_waypoints = _compute_part_distance_matrices(no_waypoint_actions[:, -1], gt_actions[:, -1], skel)
+        init_xyz_dist_matrix, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
+        
+        intermediate_xyz = xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
+        intermediate_xyz_init = init_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
+        all_xyz = xyz_dist_matrix.mean(dim=-1)
+        all_xyz_init = init_xyz_dist_matrix.mean(dim=-1)
+        
+        gt_intermediate_xyz = gt_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
+        gt_all_xyz = gt_waypoint_xyz_dist_matrix.mean(dim=-1)
+        no_intermediate_xyz = no_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
+        no_all_xyz = no_waypoint_xyz_dist_matrix.mean(dim=-1)
         
         visible_indexer = (goal_image_coords != -1).all(dim=-1)[:, :XSensConstants.upper_body_num_parts] # B, num_parts
         indexer = torch.logical_and(leaf_indexer[None], visible_indexer) # B, num_parts
@@ -334,27 +370,28 @@ class EvaluatorWaypoint(WaypointWM):
         avg_num_waypoints_visible = torch.logical_and(wpts_ < self.image_size, wpts_ > 0.).all(dim=-1).float().sum(dim=-1) # B
         
         res = {
-            "xyz_distance": leaf_xyz.mean().item(),
-            # "angular_distance": leaf_ang.mean().item(),
-            "min-xyz_distance": leaf_xyz.min().item(),
-            # "min-angular_distance": leaf_ang.min().item(),
-            "start_xyz_distance": leaf_xyz_init.mean().item(),
-            # "start_angular_distance": leaf_ang_init.mean().item(),
-            "visible_xyz_distance": visible_leaf_xyz_distance.mean().item(),
-            # "visible_angular_distance": visible_leaf_angular_distance.mean().item(),
-            "min-visible_xyz_distance": visible_leaf_xyz_distance.min().item(),
-            # "min-visible_angular_distance": visible_leaf_angular_distance.min().item(),
-            "gt_waypoint-xyz_distance": leaf_xyz_gt_waypoints.mean().item(),
-            # "gt_waypoint-angular_distance": leaf_ang_gt_waypoints.mean().item(),
-            "min-gt_waypoint-xyz_distance": leaf_xyz_gt_waypoints.min().item(),
-            # "min-gt_waypoint-angular_distance": leaf_ang_gt_waypoints.min().item(),
-            "no_waypoint-xyz_distance": leaf_xyz_no_waypoints.mean().item(),
-            # "no_waypoint-angular_distance": leaf_ang_no_waypoints.mean().item(),
-            "min-no_waypoint-xyz_distance": leaf_xyz_no_waypoints.min().item(),
-            # "min-no_waypoint-angular_distance": leaf_ang_no_waypoints.min().item(),
+            "leaf_xyz": leaf_xyz.mean().item(),
+            "leaf_xyz_min": leaf_xyz.min().item(),
+            "leaf_xyz_init": leaf_xyz_init.mean().item(),
+            "intermediate_xyz": intermediate_xyz.mean().item(),
+            "intermediate_xyz_min": intermediate_xyz.min().item(),
+            "intermediate_xyz_init": intermediate_xyz_init.mean().item(),
+            "all_xyz": all_xyz.mean().item(),
+            "all_xyz_min": all_xyz.min().item(),
+            "all_xyz_init": all_xyz_init.mean().item(),
+            # others
+            "gtwp.intermediate_xyz": gt_intermediate_xyz.mean().item(),
+            "gtwp.intermediate_xyz_min": gt_intermediate_xyz.min().item(),
+            "gtwp.all_xyz": gt_all_xyz.mean().item(),
+            "gtwp.all_xyz_min": gt_all_xyz.min().item(),
+            "nowp.intermediate_xyz": no_intermediate_xyz.mean().item(),
+            "nowp.intermediate_xyz_min": no_intermediate_xyz.min().item(),
+            "nowp.all_xyz": no_all_xyz.mean().item(),
+            "nowp.all_xyz_min": no_all_xyz.min().item(),
         }
         aux_counts = {
             "avg_waypoints_visible": avg_num_waypoints_visible.mean().item(),
+            "num_joints_visible": num_joints_visible.mean().item(),
         }
         pprint({**res, **aux_counts})
         
@@ -362,7 +399,7 @@ class EvaluatorWaypoint(WaypointWM):
             os.makedirs(save_path, exist_ok=True)
             for i in range(B):
                 leaf_xyz_val_rounded = np.round(leaf_xyz.unflatten(0, (B, -1))[i].mean().item(), decimals=3)
-                save_rollout_images(curr_obs[:1], generated_frames[:1], waypoint_annotated_goals[:1], goal_obs[:1],
+                save_rollout_images(curr_obs[:1], generated_frames[:1], waypoint_annotated_goals[:1], goal_obs[:1], gt_goal_image[:1],
                                     [f"{save_path}/eval_actions_step{cem_step}_{i}-leaf_xyz{leaf_xyz_val_rounded}.png"],
                                     pred_len=self.policy_pred_horizon)
         return res, aux_counts
