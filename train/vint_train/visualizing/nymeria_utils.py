@@ -147,7 +147,7 @@ def plot_trajs_and_points_full_body(
         
     for action in actions:
         # Plot actions
-        ax.scatter(action[:, 0], action[:, 1], action[:, 2], c='k', s=10)
+        ax.scatter(action[:, 0], action[:, 1], action[:, 2], c='k', s=8)
         
         # Plot bones
         for i, parent in enumerate(kintree_parents):
@@ -172,15 +172,15 @@ def plot_trajs_and_points_full_body(
                 ys.append(p_joint[1])
                 zs.append(p_joint[2])
                 
-            ax.plot(xs, ys, zs, color=color_skeleton[i] / 255., linewidth=4, alpha=0.9)
+            ax.plot(xs, ys, zs, color=color_skeleton[i] / 255., linewidth=3, alpha=0.9)
         
     # Origin
-    ax.scatter(0, 0, 0, c='k', s=30)
-    ax.quiver(0, 0, 0, 1, 0, 0, color='r', length=size/4, normalize=True) # +X Forward (Red)
-    ax.quiver(0, 0, 0, 0, 1, 0, color='g', length=size/4, normalize=True) # +Y Left (Green)
+    # ax.scatter(0, 0, 0, c='k', s=30)
+    # ax.quiver(0, 0, 0, 1, 0, 0, color='r', length=size/4, normalize=True) # +X Forward (Red)
+    # ax.quiver(0, 0, 0, 0, 1, 0, color='g', length=size/4, normalize=True) # +Y Left (Green)
     
     z_scale = 1. / size
-    ax.quiver(0, 0, 0, 0, 0, 1, color='b', length=size/4 * z_scale, normalize=True) # +Z Up (Blue)
+    # ax.quiver(0, 0, 0, 0, 0, 1, color='b', length=size/4 * z_scale, normalize=True) # +Z Up (Blue)
     
     ax.set_xlim(-size, size)
     ax.set_ylim(-size, size)
@@ -196,7 +196,7 @@ def plot_trajs_and_points_full_body(
     
     ax.tick_params(pad=0)
     
-    ax.set_box_aspect([2, 2, 0.75])
+    # ax.set_box_aspect([2, 2, 0.75])
     
 def save_gif(array, out_path, fps=4):
     """

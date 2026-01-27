@@ -10,6 +10,7 @@ train/logs
 train/diffusion_policy
 data_jsons
 test_dir
+nymeria_camera_dir
 outputs
 
 *.png
