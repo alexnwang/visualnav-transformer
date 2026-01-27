@@ -230,6 +230,10 @@ MODEL_DIRECTORY={
     "draw_mask": (
         "/home/anw2067/visualnav-transformer/train/config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask.yaml",
         "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_01_21_06_54:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask/ema_9.pth"
+    ),
+    "heldout": (
+        "/home/anw2067/visualnav-transformer/train/config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-heldoutEnvs.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_01_24_06_25:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-heldoutEnvs/ema_9.pth"
     )
 }
         
@@ -261,7 +265,7 @@ if __name__ == "__main__":
     parser.add_argument("--peva_context_size", type=int, default=15, help="PEVA context size")
     parser.add_argument("--peva_diffusion_steps", type=int, default=250, help="PEVA diffusion steps")
     
-    parser.add_argument("--nomad_model", type=str, default="draw", choices=["draw", "gravity", "draw_mask"])
+    parser.add_argument("--nomad_model", type=str, default="draw", choices=list(MODEL_DIRECTORY.keys()))
     parser.add_argument("--nomad_config", type=str, default=None)
     parser.add_argument("--nomad_checkpoint", type=str, default=None)
     
