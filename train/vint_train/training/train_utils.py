@@ -157,6 +157,7 @@ def train_nomad(
         B = deltas.shape[0]
         goal_mask = (torch.rand((B,), device=device) < goal_mask_prob).long() # 1 if goal mask, 0 if no mask
         
+        # goal_coordinates is fed into the vision encoder
         goal_visible_mask = 1. - (goal_image_coords != -1).all(dim=2).to(torch.float32) # B, K, 2 -> B, K (K = # parts)
         goal_coordinates = None
         if config.get("goal_type", None) in ["2d", "2d5050"]:
@@ -164,8 +165,16 @@ def train_nomad(
                 [goal_image_coords[:, XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]
             , dim=1).flatten(1, 2) # B, 4*2
             if config.get("goal_type", None) == "2d": # only modify the goal_mask for 2d goals, rather, keep it at 50/50 for 2d5050
+                raise NotImplementedError("2d is deprecated for 2d5050")
                 nonvisible_goal_mask = 1. - (goal_image_coords == -1).all(dim=-1).all(dim=-1).to(torch.float32) # 1 if goal is visible, 0 if not
                 goal_mask = (1.-((1.-goal_mask)*nonvisible_goal_mask)).long() # if goal is not visible, require goal masking
+        elif config.get("goal_type", None) in ["3d5050"]:
+            goal_pose_xyz = data["goal_pose_xyz"].to(device, non_blocking=True)[:, 0] # B, 15, 3
+            goal_coordinates = torch.stack(
+                [goal_pose_xyz[:, idx] for idx in XSensConstants.leaf_indices]
+            , dim=1).flatten(1, 2) # B, 4*3
+                
+        # goal_pose is fed into the denoising model
         if config.get("goal_type", None) == "point":
             goal_pos_xyz = data["goal_pose_xyz"].to(device, non_blocking=True)[:, 0] # B, 15, 3
             goal_pose = torch.cat(
@@ -426,12 +435,24 @@ def evaluate_nomad(
         
         naction = deltas.to(device, non_blocking=True).float()
         
+        # goal_coordinates is fed into the vision encoder
         goal_visible_mask = 1. - (goal_image_coords != -1).all(dim=2).to(torch.float32) # B, K, 2 -> B, K (K = # parts)
         goal_coordinates = None
         if config.get("goal_type", None) in ["2d", "2d5050"]:
             goal_coordinates = torch.stack(
                 [goal_image_coords[:, XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis", "Head", "R_Hand", "L_Hand"]]
             , dim=1).flatten(1, 2) # B, 4*2
+            if config.get("goal_type", None) == "2d": # only modify the goal_mask for 2d goals, rather, keep it at 50/50 for 2d5050
+                raise NotImplementedError("2d is deprecated for 2d5050")
+                nonvisible_goal_mask = 1. - (goal_image_coords == -1).all(dim=-1).all(dim=-1).to(torch.float32) # 1 if goal is visible, 0 if not
+                goal_mask = (1.-((1.-goal_mask)*nonvisible_goal_mask)).long() # if goal is not visible, require goal masking
+        elif config.get("goal_type", None) in ["3d5050"]:
+            goal_pose_xyz = data["goal_pose_xyz"].to(device, non_blocking=True)[:, 0] # B, 15, 3
+            goal_coordinates = torch.stack(
+                [goal_pose_xyz[:, idx] for idx in XSensConstants.leaf_indices]
+            , dim=1).flatten(1, 2) # B, 4*3
+            
+        # goal_pose is fed into the denoising model
         if config.get("goal_type", None) == "point":
             goal_pos_xyz = data["goal_pose_xyz"].to(device, non_blocking=True)[:, 0] # B, 15, 3
             goal_pose = torch.cat(
@@ -641,7 +662,7 @@ def model_output(
     no_mask = torch.zeros((batch_goal_images.shape[0],)).long().to(device)
     goal_mask = torch.ones((batch_goal_images.shape[0],)).long().to(device)
     
-    if waypoint_masking == "uniform":
+    if waypoint_masking is not None: # if using waypoint masking, then the fully masked example is the last observation
         obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_obs_images[:, -1], input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
     else:
         obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)

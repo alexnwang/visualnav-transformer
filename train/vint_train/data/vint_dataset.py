@@ -84,7 +84,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         
         self.traj_len_key = "all_parts"
         self.goal_type = goal_type
-        assert self.goal_type in {None, "2d", "point", "2d5050", "draw"}, "goal_format must be one of 2d, point, or 2d5050"
+        assert self.goal_type in {None, "2d", "point", "2d5050", "draw", "3d5050"}, "goal_format must be one of 2d, point, or 2d5050"
         
         traj_names_file = os.path.join(data_split_folder, "traj_names.txt")
         with open(traj_names_file, "r") as f:
@@ -115,7 +115,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         self.preserve_pose_up_down = preserve_pose_up_down
         self.waypoint_mask_prob = waypoint_mask_prob
         if self.waypoint_mask_prob is not None:
-            assert self.goal_type in ["draw", "2d", "2d5050"], "waypoint_mask_prob requires a goal_type that uses waypoints"
+            assert self.goal_type in ["draw", "2d", "2d5050", "3d5050"], "waypoint_mask_prob requires a goal_type that uses waypoints"
 
         # load data/data_config.yaml
         with open(
@@ -438,19 +438,8 @@ class ViNT_Nymeria_Dataset(Dataset):
         if "xsens_offsets" in curr_traj_data:
             ret_dict["xsens_offsets"] = torch.as_tensor(curr_traj_data["xsens_offsets"], dtype=torch.float32)
         
-        if self.goal_type in ["2d", "2d5050", "draw"]:
-            if self.waypoint_mask_prob == "uniform":
-                do_mask = torch.rand(1) < 0.5
-                if do_mask:
-                    num_mask = np.random.randint(1, 5)
-                    masked_indices = np.random.choice(4, num_mask, replace=False)
-                    for idx, part_idx in enumerate([XSensConstants.part_names.index(part_name) for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]):
-                        if idx in masked_indices:
-                            ret_dict["goal_image_coords"][idx] = torch.tensor([-1, -1])
-                    image_coords = ret_dict["goal_image_coords"]
-            
-        if self.goal_type == "point": # late fusion semi "cheat" model
-            if False: #"xsens_offsets" in curr_traj_data:
+        if self.goal_type in ["point", "3d5050"]: # late fusion semi "cheat" model
+            if "xsens_offsets" in curr_traj_data:
                 xsens_offsets = curr_traj_data["xsens_offsets"]
                 xsens_skel = XsensSkeleton(offsets=curr_traj_data["xsens_offsets"])
             else:
@@ -459,7 +448,22 @@ class ViNT_Nymeria_Dataset(Dataset):
             goal_xyz = forward_kinematics_wrapper(gt_actions_with_initial, xsens_skel, return_euler=False) # 1, 15, 3
             ret_dict["goal_pose_xyz"] = torch.as_tensor(goal_xyz, dtype=torch.float32)
             ret_dict['xsens_offsets'] = torch.as_tensor(xsens_offsets, dtype=torch.float32)
-        elif self.goal_type in ["2d", "2d5050"]:
+        
+        # if providing waypoint information, and waypoint_masking is not None, then mask the goal_image_coords. 
+        if self.goal_type in ["2d", "2d5050", "draw"]:
+            if self.waypoint_mask_prob == "uniform":
+                if torch.rand(1) < 0.5:
+                    num_mask = np.random.randint(1, 5)
+                    masked_indices = np.random.choice(4, num_mask, replace=False)
+                    for idx, part_idx in enumerate([XSensConstants.part_names.index(part_name) for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]):
+                        if idx in masked_indices:
+                            if self.goal_type in ["2d", "2d5050"]:
+                                ret_dict["goal_image_coords"][idx] = torch.tensor([-1, -1])
+                            elif self.goal_type in ["3d5050"]:
+                                ret_dict["goal_pose_xyz"][0, idx] = torch.tensor([0, 0, 0])
+                    image_coords = ret_dict["goal_image_coords"]
+            
+        if self.goal_type in ["2d", "2d5050"]:
             ret_dict["goal_image_transformed"] = obs_image_transformed[-1]
             ret_dict["goal_image"] = obs_images[-1]
         elif self.goal_type == "draw":
