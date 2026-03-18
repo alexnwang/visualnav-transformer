@@ -77,7 +77,7 @@ def _compute_part_distance_matrices(pred_actn, gt_actn, skel, aggregate_indices=
         return xyz_dist_matrix, ang_dist_matrix, leaf_xyz, ang_xyz
     return xyz_dist_matrix, ang_dist_matrix
 
-def draw_waypoints(obs, waypoints, color_order=["red", "green", "blue", "yellow"]):
+def draw_waypoints(obs, waypoints, color_order=["red", "green", "blue", "yellow"], radius=4):
     """
     Draws waypoint as circles on an image
     
@@ -95,7 +95,8 @@ def draw_waypoints(obs, waypoints, color_order=["red", "green", "blue", "yellow"
     for b in range(B):
         image = torch.clone(obs[b]) 
         for index, color in enumerate(color_order):
-            image = draw_keypoints(image, waypoints[b, index:index+1, None, :], colors=color, radius=4)
+            if (waypoints[b, index:index+1] == -1).all(): continue
+            image = draw_keypoints(image, waypoints[b, index:index+1, None, :], colors=color, radius=radius)
         output_images.append(image)
     return torch.stack(output_images, dim=0).to(device)
 

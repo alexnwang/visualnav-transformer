@@ -135,7 +135,7 @@ def get_T_C_pelvis(nymeria_dp, index):
     
     return T_C_Hd @ T_Hd_Wd @ T_Wd_P
 
-def draw_image_coords(draw, goal_image_coords, color=(255, 255, 255), num_segments=XSensConstants.upper_body_num_parts, show_text=True):
+def draw_image_coords(draw, goal_image_coords, color=(255, 255, 255), num_segments=XSensConstants.upper_body_num_parts, show_text=True, radius=3):
     num_visible = 0
     for part_name in XSensConstants.part_names[:num_segments]:
         index = XSensConstants.part_names.index(part_name)
@@ -145,8 +145,8 @@ def draw_image_coords(draw, goal_image_coords, color=(255, 255, 255), num_segmen
         if all(point == -1):
             continue
         num_visible += 1
-        
-        draw.ellipse([point[0]-3, point[1]-3, point[0]+3, point[1]+3], fill=color)
+
+        draw.ellipse([point[0]-radius, point[1]-radius, point[0]+radius, point[1]+radius], fill=color)
         if any(x in part_name for x in ["Pelvis", "Head", "Hand"]) and show_text:
             draw.text((point[0], point[1]), part_name, fill=color)
         if parent_index != -1:

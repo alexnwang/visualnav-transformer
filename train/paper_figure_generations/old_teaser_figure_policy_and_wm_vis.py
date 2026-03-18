@@ -38,7 +38,7 @@ from planning.vis_utils import *
 
 from torchvision.utils import save_image
 
-OUTPUT_DIR = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/teaser3"
+OUTPUT_DIR = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/teaser"
 DATA_SAVE_DIR = "/home/anw2067/scratch/nymeria_camera_dir"
 DATA_JSON="/home/anw2067/visualnav-transformer/data_jsons/visibility_no_data.json"
 
@@ -55,8 +55,6 @@ def main(args):
         torch.cuda.manual_seed_all(seed)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    dreamsim_model, dreamsim_preprocess = dreamsim(pretrained=True, device=device, cache_dir="/scratch/anw2067/cache")
 
     policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device=device)
     peva_model, _, peva_diffusion, peva_vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device=device,
@@ -167,16 +165,7 @@ def main(args):
         _, _, leaf_xyz, _ = _compute_part_distance_matrices(pred_actions[:, -1], gt_actions[:, -1], skel)
         argmin_idx = leaf_xyz.argmin(dim=-1)
         best_leaf_xyz = leaf_xyz[argmin_idx]
-
-        # Perceptual similarity: final predicted frame vs ground-truth goal observation
-        with torch.no_grad():
-            pred_last_pil = transforms.ToPILImage()(pred_frames[argmin_idx, -1].detach().cpu().clamp(0, 1))
-            goal_obs_pil = transforms.ToPILImage()(goal_obs[argmin_idx].detach().cpu().clamp(0, 1))
-            perceptual_dist = dreamsim_model(
-                dreamsim_preprocess(pred_last_pil).to(device),
-                dreamsim_preprocess(goal_obs_pil).to(device),
-            ).item()
-
+        
         obs_images = obs_images[argmin_idx]
         context_poses = context_poses[argmin_idx]
         goal_obs = goal_obs[argmin_idx]
@@ -198,55 +187,26 @@ def main(args):
         prev_track_name = track_name
         
         T_C_Pelvis = get_T_C_pelvis(nymeria_dp, track_index)
-        argmin_idx_int = argmin_idx.item()
-
-        # Save metrics
-        with open(os.path.join(curr_save_dir, "metrics.txt"), "w") as f:
-            f.write(f"best_leaf_xyz: {best_leaf_xyz.item():.4f}\n")
-            f.write(f"perceptual_dist: {perceptual_dist:.4f}\n")
-            f.write(f"argmin_idx: {argmin_idx_int}\n")
-
-        # 1. Waypoint-annotated image: goal_image with leaf waypoints drawn larger
-        wp_image = Image.fromarray((255.*goal_image[0].permute(1, 2, 0)).to(torch.uint8).numpy())
-        wp_draw = ImageDraw.Draw(wp_image)
-        draw_image_coords(wp_draw, goal_image_coords[None], color=(255, 200, 50), show_text=False, radius=7)
-        wp_image.save(os.path.join(curr_save_dir, "waypoint_annotated.png"))
-        waypoint_annotated_tensor = transforms.ToTensor()(wp_image)
-
-        # 2. Per-timestep action images on goal image (individual saves)
+        
+        # vis_image = obs_images[0, -1].detach().cpu()# B, 3, H, W
         vis_image = goal_image[0]
         drawn_images = []
         for t in range(pred_actions.shape[1]):
+            color_multiplier = t / pred_actions.shape[1]
             image = Image.fromarray((255.*vis_image.permute(1, 2, 0)).to(torch.uint8).numpy())
             draw = ImageDraw.Draw(image)
+            
             gc_image_coords = pose_to_image_coords(pred_actions[:, t], cam_model, xsens_offsets, T_C_Pelvis) # B, 15, 2
             gc_vis = draw_image_coords(draw, gc_image_coords, color=(int(255), int(255), int(255)), show_text=True)
             image.save(os.path.join(curr_save_dir, f"action-t{t}-gc{gc_vis}.png"))
             drawn_images.append(transforms.ToTensor()(image))
-
-        # 3. All actions accumulated on final context image
-        final_ctx_image = Image.fromarray((255.*obs_images[-1].permute(1, 2, 0)).to(torch.uint8).detach().cpu().numpy())
-        all_actions_draw = ImageDraw.Draw(final_ctx_image)
-        n_t = pred_actions.shape[1]
-        for t in range(n_t):
-            alpha = int(80 + 175 * (t / max(n_t - 1, 1)))
-            gc_coords_t = pose_to_image_coords(pred_actions[argmin_idx_int:argmin_idx_int+1, t], cam_model, xsens_offsets, T_C_Pelvis)
-            draw_image_coords(all_actions_draw, gc_coords_t, color=(alpha, alpha, alpha), show_text=False)
-        final_ctx_image.save(os.path.join(curr_save_dir, "all_actions.png"))
-        all_actions_tensor = transforms.ToTensor()(final_ctx_image)
-
-        # 4. Save all waypoint generations (pred_frames)
-        pred_frames_tensors = []
-        for t in range(pred_frames.shape[0]):
-            frame_tensor = pred_frames[t].detach().cpu()
-            save_image(frame_tensor, f"{curr_save_dir}/waypoint_gen-t{t}.png")
-            pred_frames_tensors.append(frame_tensor)
-
+        
+        for t in range(pred_frames.shape[1]):
+            save_image(pred_frames[0, t].detach().cpu(), f"{curr_save_dir}/pred_frame-t{t}.png")
+            
         save_image(goal_image[0].detach().cpu(), f"{curr_save_dir}/goal_image.png")
         save_image(goal_obs.detach().cpu(), f"{curr_save_dir}/goal_obs.png")
-        save_image(obs_images[-1].detach().cpu(), f"{curr_save_dir}/final_context.png")
-
-        # Stacked image with everything
+        
         image_list = [
             goal_image[0],
             *drawn_images,
@@ -254,23 +214,9 @@ def main(args):
             torch.ones_like(goal_image[0]),
         ]
         image_tensor = torch.stack(image_list, dim=0)
-        image_tensor = torch.cat([image_tensor, torch.stack(pred_frames_tensors), goal_obs[None].detach().cpu()], dim=0)
+        image_tensor = torch.cat([image_tensor, pred_frames.detach().cpu(), goal_obs[None].detach().cpu()], dim=0)
         save_image(image_tensor, f"{curr_save_dir}/stacked_images.png", nrow=image_tensor.shape[0] // 2)
-
-        # Teaser: 2 rows
-        # Row 1: waypoint_annotated, all_actions, goal_obs, [padding]
-        # Row 2: waypoint generations (pred_frames)
-        n_frames = len(pred_frames_tensors)
-        pad = torch.ones_like(goal_image[0])
-        top_row = [waypoint_annotated_tensor, all_actions_tensor, goal_obs.detach().cpu()]
-        while len(top_row) < n_frames:
-            top_row.append(pad)
-        top_row = top_row[:n_frames]
-        teaser_list = top_row + pred_frames_tensors
-        teaser_tensor = torch.stack(teaser_list, dim=0)
-        metric_tag = f"lxyz{best_leaf_xyz.item():.3f}_dsim{perceptual_dist:.3f}"
-        save_image(teaser_tensor, f"{curr_save_dir}/teaser_{metric_tag}.png", nrow=n_frames)
-        save_image(teaser_tensor, f"{OUTPUT_DIR}/{track_idx_name}_{metric_tag}_teaser.png", nrow=n_frames)
+        save_image(image_tensor, f"{OUTPUT_DIR}/{track_idx_name}.png", nrow=image_tensor.shape[0] // 2)
                 
         
 
