@@ -169,10 +169,12 @@ def train_nomad(
                 nonvisible_goal_mask = 1. - (goal_image_coords == -1).all(dim=-1).all(dim=-1).to(torch.float32) # 1 if goal is visible, 0 if not
                 goal_mask = (1.-((1.-goal_mask)*nonvisible_goal_mask)).long() # if goal is not visible, require goal masking
         elif config.get("goal_type", None) in ["3d5050"]:
-            goal_pose_xyz = data["goal_pose_xyz"].to(device, non_blocking=True)[:, 0] # B, 15, 3
             goal_coordinates = torch.stack(
-                [goal_pose_xyz[:, idx] for idx in XSensConstants.leaf_indices]
-            , dim=1).flatten(1, 2) # B, 4*3
+                [goal_image_coords[:, XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]
+            , dim=1) # B, 4, 2
+            goal_depth = data["goal_pose_depth"].to(device, non_blocking=True) # B, K, 2
+            goal_coordinates_depth = torch.stack([goal_depth[:, idx] for idx in XSensConstants.leaf_indices], dim=1)[..., None] # B, 4, 1
+            goal_coordinates = torch.cat([goal_coordinates, goal_coordinates_depth], dim=-1).flatten(1,2) # B, 4*3
                 
         # goal_pose is fed into the denoising model
         if config.get("goal_type", None) == "point":
@@ -447,10 +449,12 @@ def evaluate_nomad(
                 nonvisible_goal_mask = 1. - (goal_image_coords == -1).all(dim=-1).all(dim=-1).to(torch.float32) # 1 if goal is visible, 0 if not
                 goal_mask = (1.-((1.-goal_mask)*nonvisible_goal_mask)).long() # if goal is not visible, require goal masking
         elif config.get("goal_type", None) in ["3d5050"]:
-            goal_pose_xyz = data["goal_pose_xyz"].to(device, non_blocking=True)[:, 0] # B, 15, 3
             goal_coordinates = torch.stack(
-                [goal_pose_xyz[:, idx] for idx in XSensConstants.leaf_indices]
-            , dim=1).flatten(1, 2) # B, 4*3
+                [goal_image_coords[:, XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]
+            , dim=1) # B, 4, 2
+            goal_depth = data["goal_pose_depth"].to(device, non_blocking=True) # B, K
+            goal_coordinates_depth = torch.stack([goal_depth[:, idx] for idx in XSensConstants.leaf_indices], dim=1) # B, 4
+            goal_coordinates = torch.cat([goal_coordinates, goal_coordinates_depth], dim=-1).flatten(1,2) # B, 4*3
             
         # goal_pose is fed into the denoising model
         if config.get("goal_type", None) == "point":
@@ -466,9 +470,14 @@ def evaluate_nomad(
         # instead of setting masking by the goal_mask, set the goal images (to the goal if unmasked, to the latest obs if masked)
         if config.get("waypoint_masking", None) == "uniform":
             rand_goals_binary = torch.rand((B,), device=device) < 0.5
-            rand_mask_goal_images = torch.where(rand_goals_binary[:, None, None, None], batch_obs_images[:, -1], batch_goal_images)
-            rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=rand_mask_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
-            goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_obs_images[:, -1], input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+            if config.get("goal_type", None) in ["draw"]:
+                rand_mask_goal_images = torch.where(rand_goals_binary[:, None, None, None], batch_obs_images[:, -1], batch_goal_images)
+                rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=rand_mask_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+                goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_obs_images[:, -1], input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+            elif config.get("goal_type", None) in ["2d", "2d5050", "3d5050"]:
+                rand_goal_coords = goal_coordinates[rand_goals_binary]
+                rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=rand_goal_coords)
+                goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=None)
         else:
             rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=rand_goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
             goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
