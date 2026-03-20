@@ -48,40 +48,42 @@ def _compute_3d_joint_metrics(
     action_mask: torch.Tensor,
     first_pose: torch.Tensor,
     xsens_skel: XsensSkeleton,
-):
+) -> Dict[str, torch.Tensor]:
+    """
+    Compute 3D joint metrics as B x num_parts matrices.
+    Returns dict with keys: uc_xyz, uc_ang, gc_xyz, gc_ang, init_xyz, init_ang.
+    """
     uc_deltas = model_output_dict['uc_actions']
     gc_deltas = model_output_dict['gc_actions']
-    
-    # actions == rpy angles for all joints + pelvis xyz
-    uc_actions = get_action_smpl_torch(first_pose, uc_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
-    gc_actions = get_action_smpl_torch(first_pose, gc_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
-    gt_actions = get_action_smpl_torch(first_pose, batch_deltas_gt, XSensConstants.upper_body_num_parts) # B, T, 48
-    
-    def _compute_pose_and_loss(actn, gt_actn, skel, actn_mask=None):
-        gt_xyz, gt_rpy = forward_kinematics_wrapper(gt_actn, skel, XSensConstants.upper_body_num_parts, return_euler=True) # B, num_segments, 3
-        pred_xyz, pred_rpy = forward_kinematics_wrapper(actn, skel, XSensConstants.upper_body_num_parts, return_euler=True) # B, num_segments, 3
-        res = {}
-        for i, body_part_name in enumerate(XSensConstants.part_names[:XSensConstants.upper_body_num_parts]):
+
+    uc_actions = get_action_smpl_torch(first_pose, uc_deltas, XSensConstants.upper_body_num_parts)
+    gc_actions = get_action_smpl_torch(first_pose, gc_deltas, XSensConstants.upper_body_num_parts)
+    gt_actions = get_action_smpl_torch(first_pose, batch_deltas_gt, XSensConstants.upper_body_num_parts)
+
+    def _compute_matrices(pred, gt):
+        B, n = pred.shape[0], XSensConstants.upper_body_num_parts
+        gt_xyz, gt_rpy = forward_kinematics_wrapper(gt, xsens_skel, n, return_euler=True)
+        pred_xyz, pred_rpy = forward_kinematics_wrapper(pred, xsens_skel, n, return_euler=True)
+        xyz_m = torch.zeros(B, n, device=pred.device)
+        ang_m = torch.zeros(B, n, device=pred.device)
+        for i in range(n):
             R_gt = R.from_euler('xyz', gt_rpy[:, i, :].detach().cpu().numpy(), degrees=False)
             R_pred = R.from_euler('xyz', pred_rpy[:, i, :].detach().cpu().numpy(), degrees=False)
-            ang_dist = torch.from_numpy((R_gt.inv() * R_pred).magnitude() / np.pi * 180).to(actn.device).float() # B
-            xyz_dist = torch.norm(gt_xyz[:, i, :] - pred_xyz[:, i, :], dim=-1) # B
-            if actn_mask is not None:
-                ang_dist = ang_dist * actn_mask
-                xyz_dist = xyz_dist * actn_mask
-            res[f"{body_part_name}-angular_distance"] = ang_dist
-            res[f"{body_part_name}-xyz_distance"] = xyz_dist
-        return res
-    
-    uc_3d_joint_metrics_dict = _compute_pose_and_loss(uc_actions[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
-    gc_3d_joint_metrics_dict = _compute_pose_and_loss(gc_actions[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
-    init_3d_joint_metrics_dict = _compute_pose_and_loss(first_pose[:, -1], gt_actions[:, -1], xsens_skel, action_mask)
-    
-    return {
-        **{f"uc-{key}": value for key, value in uc_3d_joint_metrics_dict.items()},
-        **{f"gc-{key}": value for key, value in gc_3d_joint_metrics_dict.items()},
-        **{f"init-{key}": value for key, value in init_3d_joint_metrics_dict.items()},
-    }
+            ang_m[:, i] = torch.from_numpy((R_gt.inv() * R_pred).magnitude() / np.pi * 180).to(pred.device).float()
+            xyz_m[:, i] = torch.norm(gt_xyz[:, i, :] - pred_xyz[:, i, :], dim=-1)
+        return xyz_m, ang_m
+
+    uc_xyz, uc_ang = _compute_matrices(uc_actions[:, -1], gt_actions[:, -1])
+    gc_xyz, gc_ang = _compute_matrices(gc_actions[:, -1], gt_actions[:, -1])
+    init_xyz, init_ang = _compute_matrices(first_pose[:, -1], gt_actions[:, -1])
+
+    if action_mask is not None:
+        mask = action_mask[:, None]
+        uc_xyz, uc_ang = uc_xyz * mask, uc_ang * mask
+        gc_xyz, gc_ang = gc_xyz * mask, gc_ang * mask
+        init_xyz, init_ang = init_xyz * mask, init_ang * mask
+
+    return {"uc_xyz": uc_xyz, "uc_ang": uc_ang, "gc_xyz": gc_xyz, "gc_ang": gc_ang, "init_xyz": init_xyz, "init_ang": init_ang}
 
 
 def reduce_metrics(mdict):
@@ -89,6 +91,83 @@ def reduce_metrics(mdict):
         torch.distributed.all_reduce(value, op=torch.distributed.ReduceOp.SUM)
         mdict[key] = value / torch.distributed.get_world_size()
     return mdict
+
+def _build_metrics_data_log(
+    metrics: Dict[str, torch.Tensor],
+    goal_visible_mask: torch.Tensor,
+    prefix: str = "",
+) -> Dict:
+    """
+    Build a wandb-ready data_log dict from precomputed metric matrices.
+
+    Args:
+        metrics: dict with keys uc_xyz, uc_ang, gc_xyz, gc_ang, init_xyz, init_ang, each B x num_parts
+        goal_visible_mask: B x num_parts, 1=not visible, 0=visible
+        prefix: "" for train metrics, "eval" for eval metrics
+    """
+    sp = f"{prefix}/" if prefix else ""          # summary prefix:  "" or "eval/"
+    segp = f"{prefix}_segm" if prefix else "segm" # segm prefix: "segm" or "eval_segm"
+
+    uc_xyz, uc_ang = metrics["uc_xyz"], metrics["uc_ang"]
+    gc_xyz, gc_ang = metrics["gc_xyz"], metrics["gc_ang"]
+    init_xyz, init_ang = metrics["init_xyz"], metrics["init_ang"]
+
+    part_names = XSensConstants.part_names[:XSensConstants.upper_body_num_parts]
+    leaf_set = set(XSensConstants.leaf_parts)
+    leaf_indices = XSensConstants.leaf_indices
+    int_indices = XSensConstants.intermediate_indices
+
+    data_log = {
+        f"{sp}uc-all-xyz":      uc_xyz[0].mean().item(),
+        f"{sp}gc-all-xyz":      gc_xyz[0].mean().item(),
+        f"{sp}uc-leaf-xyz":     uc_xyz[:, leaf_indices].mean().item(),
+        f"{sp}uc-leaf-angular": uc_ang[:, leaf_indices].mean().item(),
+        f"{sp}gc-leaf-xyz":     gc_xyz[:, leaf_indices].mean().item(),
+        f"{sp}gc-leaf-angular": gc_ang[:, leaf_indices].mean().item(),
+        f"{sp}uc-int-xyz":      uc_xyz[:, int_indices].mean().item(),
+        f"{sp}uc-int-angular":  uc_ang[:, int_indices].mean().item(),
+        f"{sp}gc-int-xyz":      gc_xyz[:, int_indices].mean().item(),
+        f"{sp}gc-int-angular":  gc_ang[:, int_indices].mean().item(),
+    }
+
+    gc_leaf_xyz_vis, gc_leaf_xyz_notvis = [], []
+    gc_leaf_ang_vis, gc_leaf_ang_notvis = [], []
+
+    for i, part_name in enumerate(part_names):
+        is_leaf = part_name in leaf_set
+        segm_group = segp
+
+        for cond, xyz_m, ang_m in [("uc", uc_xyz, uc_ang), ("gc", gc_xyz, gc_ang)]:
+            data_log[f"{segm_group}/{cond}-{part_name}-xyz_distance"]     = xyz_m[:, i].mean().item()
+            data_log[f"{segm_group}/{cond}-{part_name}-angular_distance"] = ang_m[:, i].mean().item()
+
+        init_group = f"{segp}_init"
+        data_log[f"{init_group}/init-{part_name}-xyz_distance"]     = init_xyz[:, i].mean().item()
+        data_log[f"{init_group}/init-{part_name}-angular_distance"] = init_ang[:, i].mean().item()
+
+        vis_mask     = goal_visible_mask[:, i] == 1
+        not_vis_mask = ~vis_mask
+        byvis_group  = f"{segp}_byVis"
+        for metric, matrix in [("xyz_distance", gc_xyz), ("angular_distance", gc_ang)]:
+            vis_val     = matrix[vis_mask, i].mean().item()
+            not_vis_val = matrix[not_vis_mask, i].mean().item()
+            key = f"gc-{part_name}-{metric}"
+            data_log[f"{byvis_group}/vis-{key}"]    = vis_val
+            data_log[f"{byvis_group}/notVis-{key}"] = not_vis_val
+            if is_leaf:
+                if metric == "xyz_distance":
+                    gc_leaf_xyz_vis.append(vis_val)
+                    gc_leaf_xyz_notvis.append(not_vis_val)
+                else:
+                    gc_leaf_ang_vis.append(vis_val)
+                    gc_leaf_ang_notvis.append(not_vis_val)
+
+    data_log[f"{sp}gc-leaf-xyz-visible"]       = np.nanmean(gc_leaf_xyz_vis)
+    data_log[f"{sp}gc-leaf-xyz-notVisible"]    = np.nanmean(gc_leaf_xyz_notvis)
+    data_log[f"{sp}gc-leaf-angular-visible"]   = np.nanmean(gc_leaf_ang_vis)
+    data_log[f"{sp}gc-leaf-angular-notVisible"] = np.nanmean(gc_leaf_ang_notvis)
+
+    return data_log
 
 def train_nomad(
     config: dict,
@@ -259,59 +338,10 @@ def train_nomad(
             # Compute metrics
             if i % print_log_freq == 0:
                 _3dp_metrics = _compute_3d_joint_metrics(model_output_dict, deltas.to(device), action_mask.to(device), first_pose.to(device), XsensSkeleton())
-                if torch.distributed.is_initialized(): # Reduce all metrics across ranks by averaging
+                if torch.distributed.is_initialized():
                     _3dp_metrics = reduce_metrics(_3dp_metrics)
-                
-                data_log = {}
-                data_log["uc-all-xyz"] = 0
-                data_log["gc-all-xyz"] = 0
-                data_log['uc-leaf-xyz'], data_log['uc-leaf-angular'] = 0, 0
-                data_log['gc-leaf-xyz'], data_log['gc-leaf-angular'] = 0, 0
-                data_log['gc-leaf-xyz-visible'], data_log['gc-leaf-xyz-notVisible'] = [], []
-                data_log['gc-leaf-angular-visible'], data_log['gc-leaf-angular-notVisible'] = [], []
-                for key, value in _3dp_metrics.items():
-                    if "init" in key:
-                        if any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                            data_log[f"segm_leaf_init/{key}"] = value.mean().item()
-                        else:
-                            data_log[f"segm_init/{key}"] = value.mean().item()
-                    elif "uc" in key or "gc" in key:
-                        if "uc" in key and "xyz" in key:
-                            data_log[f"uc-all-xyz"] += value[..., 0].mean().item() / XSensConstants.upper_body_num_parts
-                        elif "gc" in key and "xyz" in key:
-                            data_log[f"gc-all-xyz"] += value[..., 0].mean().item() / XSensConstants.upper_body_num_parts
-            
-                        if any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                            data_log[f"segm_leaf/{key}"] = value.mean().item()
-                            if "uc" in key: 
-                                if "xyz" in key: data_log['uc-leaf-xyz'] += value.mean().item() / 4.
-                                elif "angular" in key: data_log['uc-leaf-angular'] += value.mean().item() / 4.
-                            elif "gc" in key:
-                                if "xyz" in key: data_log['gc-leaf-xyz'] += value.mean().item() / 4.
-                                elif "angular" in key: data_log['gc-leaf-angular'] += value.mean().item() / 4.
-                        else:
-                            data_log[f"segm/{key}"] = value.mean().item()
-                    
-                    if "gc" in key:
-                        part_index = XSensConstants.part_names.index(key[3:].split("-")[0])
-                        vis_val = (value[goal_visible_mask[:, part_index] == 1]).mean().item()
-                        not_vis_val = (value[goal_visible_mask[:, part_index] == 0]).mean().item()
-                        if any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                            if "xyz" in key: 
-                                data_log[f"gc-leaf-xyz-visible"].append(vis_val)
-                                data_log[f"gc-leaf-xyz-notVisible"].append(not_vis_val)
-                            elif "angular" in key: 
-                                data_log[f"gc-leaf-angular-visible"].append(vis_val)
-                                data_log[f"gc-leaf-angular-notVisible"].append(not_vis_val)
-                            data_log[f"segm_leaf_byVis/vis-{key}"] = vis_val
-                            data_log[f"segm_leaf_byVis/notVis-{key}"] = not_vis_val
-                        else:
-                            data_log[f"segm_byVis/vis-{key}"] = vis_val
-                            data_log[f"segm_byVis/notVis-{key}"] = not_vis_val
-                
-                for key in ["gc-leaf-xyz-visible", "gc-leaf-xyz-notVisible", "gc-leaf-angular-visible", "gc-leaf-angular-notVisible"]:
-                    data_log[key] = np.nanmean(data_log[key])
 
+                data_log = _build_metrics_data_log(_3dp_metrics, goal_visible_mask, prefix="")
                 if use_wandb and i % wandb_log_freq == 0 and rank == 0:
                     wandb.log(data_log, commit=False)
 
@@ -460,7 +490,7 @@ def evaluate_nomad(
                 [goal_image_coords[:, XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]
             , dim=1) # B, 4, 2
             goal_depth = data["goal_pose_depth"].to(device, non_blocking=True) # B, K
-            goal_coordinates_depth = torch.stack([goal_depth[:, idx] for idx in XSensConstants.leaf_indices], dim=1) # B, 4
+            goal_coordinates_depth = torch.stack([goal_depth[:, idx] for idx in XSensConstants.leaf_indices], dim=1)[..., None] # B, 4, 1
             goal_coordinates = torch.cat([goal_coordinates, goal_coordinates_depth], dim=-1).flatten(1,2) # B, 4*3
             
         # goal_pose is fed into the denoising model
@@ -482,7 +512,7 @@ def evaluate_nomad(
                 rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=rand_mask_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
                 goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_obs_images[:, -1], input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
             elif config.get("goal_type", None) in ["2d", "2d5050", "3d5050"]:
-                rand_goal_coords = goal_coordinates[rand_goals_binary]
+                rand_goal_coords = torch.where(rand_goals_binary[:, None], torch.zeros_like(goal_coordinates), goal_coordinates)
                 rand_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=rand_goal_coords)
                 goal_mask_cond = ema_model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=None)
         else:
@@ -568,59 +598,10 @@ def evaluate_nomad(
         deltas = unnormalize_data_smpl_pose_gaussian(deltas.flatten(0, 1)).unflatten(0, (B, -1))
         
         _3dp_metrics = _compute_3d_joint_metrics(model_output_dict, deltas.to(device), action_mask.to(device), first_pose.to(device), XsensSkeleton())
-        if torch.distributed.is_initialized(): # Reduce all metrics across ranks by averaging
+        if torch.distributed.is_initialized():
             _3dp_metrics = reduce_metrics(_3dp_metrics)
-        
-        data_log = {}
-        data_log["eval/uc-all-xyz"] = 0
-        data_log["eval/gc-all-xyz"] = 0
-        data_log["eval/uc-leaf-xyz"], data_log['eval/uc-leaf-angular'] = 0, 0
-        data_log["eval/gc-leaf-xyz"], data_log['eval/gc-leaf-angular'] = 0, 0
-        data_log['eval/gc-leaf-xyz-visible'], data_log['eval/gc-leaf-xyz-notVisible'] = [], []
-        data_log['eval/gc-leaf-angular-visible'], data_log['eval/gc-leaf-angular-notVisible'] = [], []
-        for key, value in _3dp_metrics.items():
-            if "init" in key:
-                if any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                    data_log[f"eval_segm_leaf_init/{key}"] = value.mean().item()
-                else:
-                    data_log[f"eval_segm_init/{key}"] = value.mean().item()
-            elif "uc" in key or "gc" in key:
-                if "uc" in key and "xyz" in key:
-                    data_log[f"eval/uc-all-xyz"] += value[..., 0].mean().item() / XSensConstants.upper_body_num_parts
-                elif "gc" in key and "xyz" in key:
-                    data_log[f"eval/gc-all-xyz"] += value[..., 0].mean().item() / XSensConstants.upper_body_num_parts
-                
-                if any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                    data_log[f"eval_segm_leaf/{key}"] = value.mean().item()
-                    if "uc" in key: 
-                        if "xyz" in key: data_log['eval/uc-leaf-xyz'] += value.mean().item() / 4.
-                        elif "angular" in key: data_log['eval/uc-leaf-angular'] += value.mean().item() / 4.
-                    elif "gc" in key:
-                        if "xyz" in key: data_log['eval/gc-leaf-xyz'] += value.mean().item() / 4.
-                        elif "angular" in key: data_log['eval/gc-leaf-angular'] += value.mean().item() / 4.
-                else:
-                    data_log[f"eval_segm/{key}"] = value.mean().item()
-            
-            if "gc" in key:
-                part_index = XSensConstants.part_names.index(key[3:].split("-")[0])
-                vis_val = (value[goal_visible_mask[:, part_index] == 1]).mean().item()
-                not_vis_val = (value[goal_visible_mask[:, part_index] == 0]).mean().item()
-                if any(part in key for part in ["Pelvis", "Head", "Hand"]):
-                    if "xyz" in key: 
-                        data_log[f"eval/gc-leaf-xyz-visible"].append(vis_val)
-                        data_log[f"eval/gc-leaf-xyz-notVisible"].append(not_vis_val)
-                    elif "angular" in key: 
-                        data_log[f"eval/gc-leaf-angular-visible"].append(vis_val)
-                        data_log[f"eval/gc-leaf-angular-notVisible"].append(not_vis_val)
-                    data_log[f"eval_segm_leaf_byVis/vis-{key}"] = vis_val
-                    data_log[f"eval_segm_leaf_byVis/notVis-{key}"] = not_vis_val
-                else:
-                    data_log[f"eval_segm_byVis/vis-{key}"] = vis_val
-                    data_log[f"eval_segm_byVis/notVis-{key}"] = not_vis_val
-                    
-        for key in ["eval/gc-leaf-xyz-visible", "eval/gc-leaf-xyz-notVisible", "eval/gc-leaf-angular-visible", "eval/gc-leaf-angular-notVisible"]:
-            data_log[key] = np.nanmean(data_log[key])
-    
+
+        data_log = _build_metrics_data_log(_3dp_metrics, goal_visible_mask, prefix="eval")
         all_data_logs.append(data_log)
         # if i == 0 and rank == 0:
         #     batch_viz_obs_images = TF.resize(obs_images[:, -1], VISUALIZATION_IMAGE_SIZE[::-1])
