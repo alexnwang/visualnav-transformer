@@ -263,6 +263,8 @@ def train_nomad(
                     _3dp_metrics = reduce_metrics(_3dp_metrics)
                 
                 data_log = {}
+                data_log["uc-all-xyz"] = 0
+                data_log["gc-all-xyz"] = 0
                 data_log['uc-leaf-xyz'], data_log['uc-leaf-angular'] = 0, 0
                 data_log['gc-leaf-xyz'], data_log['gc-leaf-angular'] = 0, 0
                 data_log['gc-leaf-xyz-visible'], data_log['gc-leaf-xyz-notVisible'] = [], []
@@ -274,6 +276,11 @@ def train_nomad(
                         else:
                             data_log[f"segm_init/{key}"] = value.mean().item()
                     elif "uc" in key or "gc" in key:
+                        if "uc" in key and "xyz" in key:
+                            data_log[f"uc-all-xyz"] += value[..., 0].mean().item() / XSensConstants.upper_body_num_parts
+                        elif "gc" in key and "xyz" in key:
+                            data_log[f"gc-all-xyz"] += value[..., 0].mean().item() / XSensConstants.upper_body_num_parts
+            
                         if any(part in key for part in ["Pelvis", "Head", "Hand"]):
                             data_log[f"segm_leaf/{key}"] = value.mean().item()
                             if "uc" in key: 
@@ -308,25 +315,25 @@ def train_nomad(
                 if use_wandb and i % wandb_log_freq == 0 and rank == 0:
                     wandb.log(data_log, commit=False)
 
-            if image_log_freq != 0 and i % image_log_freq == 0 and rank == 0:
-                batch_viz_obs_images = TF.resize(obs_images[:, -1], VISUALIZATION_IMAGE_SIZE[::-1])
-                batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-                path = os.path.join(project_folder, f"epoch_{epoch}", "train")
-                os.makedirs(path, exist_ok=True)
+            # if image_log_freq != 0 and i % image_log_freq == 0 and rank == 0:
+            #     batch_viz_obs_images = TF.resize(obs_images[:, -1], VISUALIZATION_IMAGE_SIZE[::-1])
+            #     batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+            #     path = os.path.join(project_folder, f"epoch_{epoch}", "train")
+            #     os.makedirs(path, exist_ok=True)
                 
-                for idx_ in range(5):
-                    plot_fname = plot_images_and_actions_full_body(
-                        image_plot_dir=path,
-                        name=f"batch{i}_idx{idx_}",
-                        cur_obs_image=batch_viz_obs_images[idx_],
-                        cur_goal_image=batch_viz_goal_images[idx_],
-                        cur_first_pose=first_pose[idx_],
-                        gt_deltas=deltas[idx_],
-                        deltas={"uncond": model_output_dict["uc_actions"][idx_], "goalcond": model_output_dict["gc_actions"][idx_]},
-                        xsens_skel=XsensSkeleton()
-                    )
-                    if use_wandb and i % wandb_log_freq == 0:
-                        wandb.log({f"train_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+            #     for idx_ in range(5):
+            #         plot_fname = plot_images_and_actions_full_body(
+            #             image_plot_dir=path,
+            #             name=f"batch{i}_idx{idx_}",
+            #             cur_obs_image=batch_viz_obs_images[idx_],
+            #             cur_goal_image=batch_viz_goal_images[idx_],
+            #             cur_first_pose=first_pose[idx_],
+            #             gt_deltas=deltas[idx_],
+            #             deltas={"uncond": model_output_dict["uc_actions"][idx_], "goalcond": model_output_dict["gc_actions"][idx_]},
+            #             xsens_skel=XsensSkeleton()
+            #         )
+            #         if use_wandb and i % wandb_log_freq == 0:
+            #             wandb.log({f"train_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
 
         # logging
         reduced_values = {
@@ -565,6 +572,8 @@ def evaluate_nomad(
             _3dp_metrics = reduce_metrics(_3dp_metrics)
         
         data_log = {}
+        data_log["eval/uc-all-xyz"] = 0
+        data_log["eval/gc-all-xyz"] = 0
         data_log["eval/uc-leaf-xyz"], data_log['eval/uc-leaf-angular'] = 0, 0
         data_log["eval/gc-leaf-xyz"], data_log['eval/gc-leaf-angular'] = 0, 0
         data_log['eval/gc-leaf-xyz-visible'], data_log['eval/gc-leaf-xyz-notVisible'] = [], []
@@ -576,6 +585,11 @@ def evaluate_nomad(
                 else:
                     data_log[f"eval_segm_init/{key}"] = value.mean().item()
             elif "uc" in key or "gc" in key:
+                if "uc" in key and "xyz" in key:
+                    data_log[f"eval/uc-all-xyz"] += value[..., 0].mean().item() / XSensConstants.upper_body_num_parts
+                elif "gc" in key and "xyz" in key:
+                    data_log[f"eval/gc-all-xyz"] += value[..., 0].mean().item() / XSensConstants.upper_body_num_parts
+                
                 if any(part in key for part in ["Pelvis", "Head", "Hand"]):
                     data_log[f"eval_segm_leaf/{key}"] = value.mean().item()
                     if "uc" in key: 
@@ -608,24 +622,24 @@ def evaluate_nomad(
             data_log[key] = np.nanmean(data_log[key])
     
         all_data_logs.append(data_log)
-        if i == 0 and rank == 0:
-            batch_viz_obs_images = TF.resize(obs_images[:, -1], VISUALIZATION_IMAGE_SIZE[::-1])
-            batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
-            path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
-            os.makedirs(path, exist_ok=True)
-            for idx_ in range(min(10, B)):
-                plot_fname = plot_images_and_actions_full_body(
-                    image_plot_dir=path,
-                    name=f"batch{i}_idx{idx_}",
-                    cur_obs_image=batch_viz_obs_images[idx_],
-                    cur_goal_image=batch_viz_goal_images[idx_],
-                    cur_first_pose=first_pose[idx_],
-                    gt_deltas=deltas[idx_],
-                    deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
-                    xsens_skel=XsensSkeleton()
-                )
-                if use_wandb:
-                    wandb.log({f"eval_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
+        # if i == 0 and rank == 0:
+        #     batch_viz_obs_images = TF.resize(obs_images[:, -1], VISUALIZATION_IMAGE_SIZE[::-1])
+        #     batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+        #     path = os.path.join(project_folder, f"epoch_{epoch}", "eval")
+        #     os.makedirs(path, exist_ok=True)
+        #     for idx_ in range(min(10, B)):
+        #         plot_fname = plot_images_and_actions_full_body(
+        #             image_plot_dir=path,
+        #             name=f"batch{i}_idx{idx_}",
+        #             cur_obs_image=batch_viz_obs_images[idx_],
+        #             cur_goal_image=batch_viz_goal_images[idx_],
+        #             cur_first_pose=first_pose[idx_],
+        #             gt_deltas=deltas[idx_],
+        #             deltas={"uncond": model_output_dict['uc_actions'][idx_], "goalcond": model_output_dict['gc_actions'][idx_]},
+        #             xsens_skel=XsensSkeleton()
+        #         )
+        #         if use_wandb:
+        #             wandb.log({f"eval_vis/trajectory_gif_ex{idx_}": wandb.Video(plot_fname, format="gif")}, commit=False)
 
     # At the end, log averaged metrics to wandb
     if use_wandb and rank == 0:
