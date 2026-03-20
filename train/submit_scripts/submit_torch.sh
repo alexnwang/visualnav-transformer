@@ -17,7 +17,7 @@ sbatch <<EOF
 #SBATCH --tasks-per-node=1
 #SBATCH --cpus-per-task=$((16 * NUM_GPUS))
 #SBATCH --gres=gpu:${NUM_GPUS}
-#SBATCH --constraint=l40s
+#SBATCH --constraint=l40s|a100|h100
 #SBATCH --time=36:00:00
 #SBATCH --mem=$((100 * NUM_GPUS))GB
 #SBATCH --job-name=nomad
