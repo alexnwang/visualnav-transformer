@@ -453,17 +453,16 @@ class ViNT_Nymeria_Dataset(Dataset):
             ret_dict["goal_pose_depth"] = torch.as_tensor(curr_traj_data["depth_matrix"][curr_time, target_idx, :], dtype=torch.float32) # P
                 
         # if providing waypoint information, and waypoint_masking is not None, then mask the goal_image_coords. 
-        if self.goal_type in ["2d", "2d5050", "draw"]:
+        if self.goal_type in ["2d", "2d5050", "draw", "3d5050"]:
             if self.waypoint_mask_prob == "uniform":
                 if torch.rand(1) < 0.5:
                     num_mask = np.random.randint(1, 5)
                     masked_indices = np.random.choice(4, num_mask, replace=False)
                     for idx, part_idx in enumerate([XSensConstants.part_names.index(part_name) for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]):
                         if idx in masked_indices:
-                            if self.goal_type in ["2d", "2d5050"]:
-                                ret_dict["goal_image_coords"][idx] = torch.tensor([-1, -1])
-                            elif self.goal_type in ["3d5050"]:
-                                ret_dict["goal_pose_xyz"][idx] = -1.
+                            ret_dict["goal_image_coords"][part_idx] = torch.tensor([-1, -1])
+                            if self.goal_type in ["3d5050"]:
+                                ret_dict["goal_pose_depth"][part_idx] = -1.
                     image_coords = ret_dict["goal_image_coords"]
             
         if self.goal_type in ["2d", "2d5050"]:

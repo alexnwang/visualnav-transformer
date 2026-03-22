@@ -118,8 +118,8 @@ def _build_metrics_data_log(
     int_indices = XSensConstants.intermediate_indices
 
     data_log = {
-        f"{sp}uc-all-xyz":      uc_xyz[0].mean().item(),
-        f"{sp}gc-all-xyz":      gc_xyz[0].mean().item(),
+        f"{sp}uc-all-xyz":      uc_xyz.mean().item(),
+        f"{sp}gc-all-xyz":      gc_xyz.mean().item(),
         f"{sp}uc-leaf-xyz":     uc_xyz[:, leaf_indices].mean().item(),
         f"{sp}uc-leaf-angular": uc_ang[:, leaf_indices].mean().item(),
         f"{sp}gc-leaf-xyz":     gc_xyz[:, leaf_indices].mean().item(),
@@ -667,7 +667,10 @@ def model_output(
     goal_mask = torch.ones((batch_goal_images.shape[0],)).long().to(device)
     
     if waypoint_masking is not None: # if using waypoint masking, then the fully masked example is the last observation
-        obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_obs_images[:, -1], input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
+        if goal_coordinates is not None: # coordinate-based masking (2d/2d5050/3d5050): zero out coords
+            obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=None)
+        else: # image-based masking (draw): replace goal image with last obs
+            obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_obs_images[:, -1], input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=None)
     else:
         obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
     obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
