@@ -4,13 +4,72 @@ from pprint import pprint
 import torch
 import copy
 from torchvision import transforms
+from torchvision.utils import save_image as tv_save_image
 from dreamsim import dreamsim
 import numpy as np
+from PIL import Image, ImageDraw
 from planning.plotting_fns import save_rollout_images, save_topk_plot
 from vint_train.data.misc import XSensConstants, XsensSkeleton
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch
 from planning.utils import _compute_pose_and_loss, _compute_part_distance_matrices
 from planning.sampling import peva_sample, waypoint_sample
+
+def save_mu_step_results(cem_step, mu_rollout_state, state_0, state_g, cam_model, T_C_pelvis, save_path):
+    """
+    Save per-iteration mu evaluation artifacts:
+      - WM-generated predicted frames
+      - Skeleton overlays on the current observation for each predicted timestep
+      - Waypoint-annotated goal images (waypoint CEM only)
+
+    Args:
+        cem_step: CEM iteration index
+        mu_rollout_state: output of wm.rollout(state_0, mu) — generated_obs, deltas, goal_images
+        state_0: transformed initial observation dict (trans_obs_0)
+        state_g: encoded goal state dict (z_obs_g)
+        cam_model: camera calibration (from NymeriaDataProvider), or None to skip skeleton vis
+        T_C_pelvis: SE3 transform pelvis→camera at curr_time, or None to skip skeleton vis
+        save_path: base task directory; a subdirectory mu_step{cem_step:03d} is created inside
+    """
+    step_dir = os.path.join(save_path, f"mu_step{cem_step:03d}")
+    os.makedirs(step_dir, exist_ok=True)
+
+    generated_obs = mu_rollout_state["generated_obs"]  # (1, T, 3, H, W)
+    tv_save_image(generated_obs[0], os.path.join(step_dir, "gen_frames.png"), nrow=generated_obs.shape[1])
+
+    # Skeleton overlays on current observation
+    if cam_model is not None and T_C_pelvis is not None:
+        from planning.vis_utils import pose_to_image_coords, draw_image_coords as draw_skel
+        from torchvision import transforms as T_transforms
+
+        pred_deltas = mu_rollout_state["deltas"]  # (1, T, 48)
+        first_pose = state_g["first_pose"]         # (1, 1, 48)
+        xsens_offsets = state_g["xsens_offsets"][0]  # (15, 3)
+        image_size = state_0["images"].shape[-1]
+
+        pred_actions = get_action_smpl_torch(
+            first_pose, pred_deltas, XSensConstants.upper_body_num_parts
+        )  # (1, T, 48)
+        curr_image = state_0["images"][0, -1]  # (3, H, W)
+
+        skel_tensors = []
+        for t in range(pred_actions.shape[1]):
+            img_pil = Image.fromarray(
+                (255.0 * curr_image.permute(1, 2, 0)).to(torch.uint8).numpy()
+            )
+            draw = ImageDraw.Draw(img_pil)
+            image_coords = pose_to_image_coords(
+                pred_actions[:, t], cam_model, xsens_offsets, T_C_pelvis, image_size=image_size
+            )  # (1, 15, 2)
+            draw_skel(draw, image_coords)
+            skel_tensors.append(T_transforms.ToTensor()(img_pil))
+        tv_save_image(torch.stack(skel_tensors), os.path.join(step_dir, "skel_overlays.png"),
+                      nrow=len(skel_tensors))
+
+    # Waypoint-annotated goal images (waypoint CEM only)
+    goal_images = mu_rollout_state.get("goal_images")
+    if goal_images is not None:
+        tv_save_image(goal_images[0], os.path.join(step_dir, "wp_annot.png"), nrow=goal_images.shape[1])
+
 
 class Preprocessor:
     def __init__(self, transform=torch.nn.Identity()):
@@ -278,7 +337,16 @@ class EvaluatorPeva(PevaWM):
                 save_rollout_images(curr_obs[:1], generated_frames[:1], None, goal_obs[:1], gt_goal_image[:1],
                                     [f"{save_path}/eval_actions_step{cem_step}_{i}-leaf_xyz{leaf_xyz_val_rounded}.png"])
         return res, other_vals
-        
+
+    def eval_mu_step(self, cem_step, mu, mu_rollout_state, state_0, state_g,
+                     cam_model=None, T_C_pelvis=None, save_path=None):
+        """Evaluate mu after a CEM iteration: compute metrics and save artifacts."""
+        metrics, other_vals = self.eval_actions(cem_step, mu, state_0, state_g, save_path=None)
+        if save_path is not None:
+            save_mu_step_results(cem_step, mu_rollout_state, state_0, state_g,
+                                 cam_model, T_C_pelvis, save_path)
+        return metrics, other_vals
+
 
 class EvaluatorWaypoint(WaypointWM):
     def __init__(self,
@@ -403,3 +471,12 @@ class EvaluatorWaypoint(WaypointWM):
                                     [f"{save_path}/eval_actions_step{cem_step}_{i}-leaf_xyz{leaf_xyz_val_rounded}.png"],
                                     pred_len=self.policy_pred_horizon)
         return res, aux_counts
+
+    def eval_mu_step(self, cem_step, mu, mu_rollout_state, state_0, state_g,
+                     cam_model=None, T_C_pelvis=None, save_path=None):
+        """Evaluate mu after a CEM iteration: compute metrics and save artifacts."""
+        metrics, other_vals = self.eval_actions(cem_step, mu, state_0, state_g, save_path=None)
+        if save_path is not None:
+            save_mu_step_results(cem_step, mu_rollout_state, state_0, state_g,
+                                 cam_model, T_C_pelvis, save_path)
+        return metrics, other_vals

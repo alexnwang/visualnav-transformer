@@ -42,7 +42,6 @@ class CEMPlanner(BasePlanner):
         num_samples,
         var_scale,
         opt_steps,
-        eval_every,
         wm,
         action_dim,
         objective_fn,
@@ -56,15 +55,14 @@ class CEMPlanner(BasePlanner):
         Args:
             horizon (int): time horizon / num time steps
             topk: (int): num samples kept per step
-            num_samples (int): number of samples per step 
+            num_samples (int): number of samples per step
             var_scale (float): initial variance scale sigma
             opt_steps (int): the number of optimization steps (generations)
-            eval_every (int): eval_freq, evaluation checks how good mu is
             wm (WorldModel): the world model
             action_dim (int): the dimension of the action
             objective_fn (ObjectiveFunction): the objective function, compares predicted obs, with gt obs
             preprocessor (Preprocessor): the preprocessor, image preprocessing
-            evaluator (Evaluator): the evaluator for mu after eval_every steps
+            evaluator (Evaluator): the evaluator for mu, called every CEM iteration
             wandb_run (wandb.Run): the wandb run
             log_dir (str): the directory of the logs
             metric_keys (list): the keys of the metrics to log, the first key is the primary metric
@@ -84,8 +82,7 @@ class CEMPlanner(BasePlanner):
         self.num_samples = num_samples
         self.var_scale = var_scale
         self.opt_steps = opt_steps
-        self.eval_every = eval_every
-        
+
         os.makedirs(log_dir, exist_ok=True)
         
         self.accum_metrics = defaultdict(list)
@@ -161,7 +158,7 @@ class CEMPlanner(BasePlanner):
                 combined_metrics[key] = metrics_dict.get(key, 0.0)
         return combined_metrics
 
-    def plan(self, obs_0, obs_g, task_name, actions=None):
+    def plan(self, obs_0, obs_g, task_name, actions=None, cam_model=None, T_C_pelvis=None):
         """
         Args:
             actions: normalized
@@ -218,27 +215,30 @@ class CEMPlanner(BasePlanner):
             sigma = topk_action.std(dim=0, keepdim=True)
 
             self.accum_objective_metric_dicts[task_name].append({**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1})
-            log_dict = {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}    
+            log_dict = {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}
             if self.wandb_run is not None:
                 self.wandb_run.log(log_dict, commit=False)
-                
-            if self.evaluator is not None and i % self.eval_every == 0:
-                metrics, other_vals = self.evaluator.eval_actions(i, mu, trans_obs_0, z_obs_g, save_path=f"{self.log_dir}/{task_name}")
+
+            # Per-iteration mu evaluation: extra WM rollout on updated mu
+            with torch.no_grad():
+                mu_state = self.wm.rollout(state_0=trans_obs_0, act=mu)
+            mu_loss, _ = self.objective_fn(i, mu_state, trans_obs_0, z_obs_g, save_path=None, topk=0)
+            mu_dreamsim = mu_loss[0].item()
+
+            if self.evaluator is not None:
+                metrics, other_vals = self.evaluator.eval_mu_step(
+                    i, mu, mu_state, trans_obs_0, z_obs_g,
+                    cam_model=cam_model, T_C_pelvis=T_C_pelvis,
+                    save_path=f"{self.log_dir}/{task_name}",
+                )
+                metrics["dreamsim"] = mu_dreamsim
                 self.accum_eval_metric_dicts[task_name].append(metrics)
                 self.accum_eval_other_vals[task_name].append(other_vals)
-                
-                # tag the metrics with the present task name
+
                 logs_tagged = {f"eval/{k}": v for k, v in {**metrics, **other_vals}.items()}
-                logs_tagged.update({"step": i + 1})
-                # aggregate the metrics across all workers
+                logs_tagged["step"] = i + 1
                 if self.wandb_run is not None:
                     self.wandb_run.log(logs_tagged, commit=True)
-        active_metrics_dict = get_best_from_dict_list(self.accum_eval_metric_dicts[task_name])
-        active_other_vals_dict = get_average_from_dict_list(self.accum_eval_other_vals[task_name])
-        if self.wandb_run is not None:
-            self.wandb_run.log(
-                {f"active/{k}": v for k, v in {**active_metrics_dict, **active_other_vals_dict}.items()}, commit=False
-            )
     
         for k_steps in range(1, self.opt_steps + 1):
             accum_dict = {}

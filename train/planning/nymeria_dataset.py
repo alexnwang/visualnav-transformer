@@ -149,7 +149,6 @@ def build_planning_split(
     traj_names_file: str,
     split_save_path: str,
     context_size: int,
-    len_traj_pred: int,
     min_dist_cat: int,
     max_dist_cat: int,
     goal_offsets: Optional[List[int]] = None,
@@ -174,7 +173,6 @@ def build_planning_split(
         traj_names_file: path to .txt file listing trajectory names (one per line)
         split_save_path: where to write the resulting pkl
         context_size: number of context frames required before curr_time
-        len_traj_pred: action prediction horizon (used to compute end_time)
         min_dist_cat: minimum goal offset in frames
         max_dist_cat: maximum goal offset in frames (must be <= proj_half=32)
         goal_offsets: explicit list of per-curr_time goal offsets to try; if
@@ -207,7 +205,7 @@ def build_planning_split(
         proj_half = traj_data["image_projection_matrix"].shape[1] // 2
 
         begin_time = context_size * waypoint_spacing
-        end_time = traj_len - end_slack - len_traj_pred * waypoint_spacing
+        end_time = traj_len - end_slack
 
         for curr_time in range(begin_time, end_time, curr_time_stride * waypoint_spacing):
             for offset in goal_offsets:
@@ -278,17 +276,23 @@ class NymeriaPlanningDataset(Dataset):
     tensors, no random goal sampling, no normalization.
 
     Returned batch keys:
-        obs_images         (context_size+1, 3, H, W)
-        goal_image         (3, H, W)  — raw goal frame, or keypoint-drawn
-        goal_obs           (3, H, W)  — always the raw goal frame
-        context_poses      (context_size+1, 48)
-        deltas             (len_traj_pred, 48)
-        first_pose         (1, 48)
-        xsens_offsets      (15, 3)
-        goal_image_coords  (23, 2)
-        dataset_index      int
-        dataset_track      str
-        dataset_track_index int
+        obs_images            (context_size+1, 3, H, W)  — context frames + current frame
+        goal_image            (3, H, W)  — raw goal frame, or keypoint-drawn
+        goal_obs              (3, H, W)  — always the raw goal frame
+        gt_frames             (n_steps, 3, H, W)  — GT frames from curr_time+1 to goal_time inclusive
+        gt_image_coords_seq   (n_steps, 23, 2)    — 2D joint projections for each GT intermediate pose
+        context_poses         (context_size+1, 48)
+        deltas                (n_steps, 48)  — GT action deltas from curr_time to goal_time
+        first_pose            (1, 48)
+        goal_pose             (1, 48)  — goal pose in start-relative pelvis frame
+        xsens_offsets         (15, 3)
+        goal_image_coords     (23, 2)  — 2D joint projections at goal_time
+        dataset_index         int
+        dataset_track         str
+        start_index           int  — curr_time frame index
+        goal_index            int  — goal_time frame index
+
+    n_steps = goal_time - curr_time (fixed per split by min/max_dist_cat).
     """
 
     def __init__(
@@ -297,7 +301,6 @@ class NymeriaPlanningDataset(Dataset):
         data_folder: str,
         image_size: Tuple[int, int],
         context_size: int,
-        len_traj_pred: int,
         goal_type: Optional[str] = None,
         waypoint_spacing: int = 1,
         obs_type: str = "png",
@@ -308,7 +311,6 @@ class NymeriaPlanningDataset(Dataset):
         self.data_folder = data_folder
         self.image_size = image_size
         self.context_size = context_size
-        self.len_traj_pred = len_traj_pred
         self.goal_type = goal_type
         self.waypoint_spacing = waypoint_spacing
         self.obs_type = obs_type
@@ -336,11 +338,12 @@ class NymeriaPlanningDataset(Dataset):
         track = task["track"]
         curr_time = task["curr_time"]
         goal_time = task["goal_time"]
+        n_steps = goal_time - curr_time
 
         traj_data = self._get_trajectory(track)
         ws = self.waypoint_spacing
 
-        # Context images (includes curr_time as the last frame)
+        # Context images: context frames + current frame (curr_time is last)
         context_times = list(range(
             curr_time - self.context_size * ws,
             curr_time + 1,
@@ -348,21 +351,30 @@ class NymeriaPlanningDataset(Dataset):
         ))
         obs_images = torch.stack([self._load_image(track, t) for t in context_times], dim=0)
 
-        # Goal frame
-        goal_obs = self._load_image(track, goal_time)
+        # GT trajectory frames and image coords: curr_time+1 through goal_time inclusive
+        gt_times = list(range(curr_time + 1, goal_time + 1))
+        gt_frames = torch.stack([self._load_image(track, t) for t in gt_times], dim=0)  # (n_steps, 3, H, W)
+        gt_image_coords_seq = torch.stack([
+            _goal_image_coords(traj_data, curr_time, t, self.image_size[0])
+            for t in gt_times
+        ], dim=0)  # (n_steps, 23, 2)
 
-        # 2D joint projections at goal_time
-        goal_image_coords = _goal_image_coords(
-            traj_data, curr_time, goal_time, self.image_size[0]
-        )
+        # Goal frame is the last GT frame
+        goal_obs = gt_frames[-1]  # (3, H, W)
+        goal_image_coords = gt_image_coords_seq[-1]  # (23, 2)
 
         # Context poses (each frame expressed in its own pelvis frame)
         context_poses = torch.cat([_pose_relpelvis(traj_data, t) for t in context_times], dim=0)
 
-        # Initial pose and action deltas
+        # Initial pose
         first_pose = _pose_relpelvis(traj_data, curr_time)  # (1, 48)
-        actions = _actions_smpl(traj_data, curr_time, self.len_traj_pred)  # (len_traj_pred, 48)
-        deltas = get_delta_smpl(actions, num_segments=_NUM_SEG)  # (len_traj_pred, 48)
+
+        # Action deltas from curr_time to goal_time (in start-relative pelvis frame)
+        actions = _actions_smpl(traj_data, curr_time, n_steps)  # (n_steps, 48)
+        deltas = get_delta_smpl(actions, num_segments=_NUM_SEG)  # (n_steps, 48)
+
+        # Goal pose: final step in start-relative frame
+        goal_pose = actions[-1:].clone()  # (1, 48)
 
         # Goal image — raw, or keypoints drawn on current obs
         if self.goal_type == "draw":
@@ -373,13 +385,17 @@ class NymeriaPlanningDataset(Dataset):
         ret = {
             "dataset_index": i,
             "dataset_track": track,
-            "dataset_track_index": curr_time,
+            "start_index": curr_time,
+            "goal_index": goal_time,
             "obs_images": obs_images.float(),
             "goal_image": goal_image.float(),
             "goal_obs": goal_obs.float(),
+            "gt_frames": gt_frames.float(),
+            "gt_image_coords_seq": gt_image_coords_seq.float(),
             "context_poses": context_poses.float(),
             "deltas": deltas.float(),
             "first_pose": first_pose.float(),
+            "goal_pose": goal_pose.float(),
             "goal_image_coords": goal_image_coords.float(),
         }
 
