@@ -18,9 +18,11 @@ from diffusers.models import AutoencoderKL
 from peva.models import CDiT_models
 from peva.diffusion import create_diffusion
 
+from vint_train.training.nymeria_training_utils import get_action_smpl_torch
+from vint_train.data.misc import XSensConstants, XsensSkeleton
+from planning.utils import _compute_pose_and_loss, _compute_part_distance_matrices
 from planning.cem import CEMPlanner
-from planning.utils import load_peva, load_policy
-from planning.nymeria_dataset import NymeriaPlanningDataset, build_planning_split
+from planning.utils import get_nymeria_dataset, load_peva, load_policy
 from planning.wrappers import EvaluatorPeva, EvaluatorWaypoint, ObjectiveDreamSIM, PevaWM, Preprocessor, WaypointWM
 
 from torchvision.utils import save_image
@@ -111,9 +113,11 @@ def main(args):
     algo = args.algo
     
     datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    run_name = f"{algo}_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}-dist{args.min_dist_cat}-{args.max_dist_cat}"
+    run_name = f"{algo}_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}"
     if args.use_leafxyz_as_cost:
         run_name = "CHEATMETRIC_leafxyz_as_cost" + run_name
+    if args.goal_timestep_offset is not None:
+        run_name = run_name + f"-gt{args.goal_timestep_offset}"
     if world_size > 1:
         run_name = run_name + f"-rank:ws-{rank}:{world_size}"
     if args.test:
@@ -137,54 +141,59 @@ def main(args):
         cem_planner, nomad_config, peva_config = build_peva_cem(args, wandb_run, log_dir, device)
         
     # prepare dataset
-    data_config = nomad_config["datasets"]["nymeria"]
-    context_size = max(args.peva_context_size - 1, nomad_config["context_size"])
-    tasks_file = build_planning_split(
-        data_folder=data_config["data_folder"],
-        traj_names_file=os.path.join(data_config["test"], "traj_names.txt"),
-        split_save_path=os.path.join(
-            data_config["test"],
-            f"planning_split_dist{args.min_dist_cat}-{args.max_dist_cat}"
-            f"_ctx{context_size}_thresh{args.min_dist_threshold}"
-            f"{'_keepnonvis' if args.keep_nonvisible_goal else ''}.pkl"
-        ),
-        context_size=context_size,
-        len_traj_pred=nomad_config["len_traj_pred"],
-        min_dist_cat=args.min_dist_cat,
-        max_dist_cat=args.max_dist_cat,
-        min_dist_threshold=args.min_dist_threshold,
-        keep_nonvisible_goal=args.keep_nonvisible_goal,
-        waypoint_spacing=data_config.get("waypoint_spacing", 1),
-        end_slack=data_config.get("end_slack", 0),
-        curr_time_stride=args.curr_time_stride,
-    )
-    dataset = NymeriaPlanningDataset(
-        tasks_file=tasks_file,
-        data_folder=data_config["data_folder"],
-        image_size=nomad_config["image_size"],
-        context_size=context_size,
-        len_traj_pred=nomad_config["len_traj_pred"],
-        goal_type=nomad_config.get("goal_type", None),
-        waypoint_spacing=data_config.get("waypoint_spacing", 1),
-    )
     shuffle = args.shuffle
+    dataset = get_nymeria_dataset(nomad_config, context_size=max(args.peva_context_size-1, nomad_config["context_size"]), goal_timestep_offset=args.goal_timestep_offset)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle, seed=seed)
     dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=1)
-
+    
+    
     count = 0
+    curr_track, curr_index = None, None
     for idx, batch in enumerate(dataloader):
-        obs_images = batch["obs_images"]         # 1, context_size+1, 3, H, W
-        goal_image = batch["goal_image"]         # 1, 3, H, W
-        context_poses = batch["context_poses"]   # 1, context_size+1, 48
-        deltas = batch["deltas"]                 # 1, len_traj_pred, 48
-        first_pose = batch["first_pose"]         # 1, 1, 48
-        xsens_offsets = batch["xsens_offsets"]   # 1, 15, 3
-        goal_obs = batch["goal_obs"]             # 1, 3, H, W
-        goal_image_coords = batch["goal_image_coords"]  # 1, 23, 2
+        obs_images = batch["obs_images"] # 1, context_size, 3, H, W
+        goal_image = batch["goal_image"] # 1, 3, H, W
+        context_poses = batch["context_poses"] # 1, context_size, 48
 
+        deltas = batch["deltas"] # 1, horizon, action_dim
+        first_pose = batch["first_pose"] # 1, 1, 48
+        xsens_offsets = batch["xsens_offsets"] # 1, 15, 3
+        goal_obs = batch["goal_obs"] # 1, 3, H, W
+        goal_image_coords = batch["goal_image_coords"] # 1, 23, 2
+        
         dataset_index = batch["dataset_index"].item()
         track, track_index = batch["dataset_track"][0], batch["dataset_track_index"].item()
         track_idx_name = f"{track}-{track_index}"
+        
+        skel = XsensSkeleton(xsens_offsets[0])
+        gt_actions = get_action_smpl_torch(first_pose, deltas, XSensConstants.upper_body_num_parts) # B, T, 48
+        xyz_dist_matrix, _, init_xyz, _ = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
+        visible_plus_head = (goal_image_coords != -1).all(dim=-1)[:, :XSensConstants.upper_body_num_parts] # B, num_parts
+        visible_plus_head[:, XSensConstants.part_names.index("Head")] = True
+        init_visible_plus_head = xyz_dist_matrix[:, XSensConstants.leaf_indices] * visible_plus_head[:, XSensConstants.leaf_indices]
+        init_visible_plus_head = (init_visible_plus_head.sum() / visible_plus_head.sum()).item()
+        
+        if not args.keep_nonvisible_goal:
+            visible = False
+            find_count = 0
+            for part in ["Pelvis", "Head", "R_Hand", "L_Hand"]:
+                index = XSensConstants.part_names.index(part)
+                if all(goal_image_coords[0, index] != -1):
+                    find_count += 1
+                    if find_count > 0:
+                        visible = True
+                        break
+            if not visible:
+                print(f"No visible parts in {track_idx_name}")
+                continue
+            
+        if init_visible_plus_head < args.min_dist_threshold:
+            print(f"Initial distance of visible + head joints is less than {args.min_dist_threshold} in {track_idx_name}")
+            continue
+        
+        if curr_track == track and dataset_index - curr_index < args.min_index_goal:
+            continue
+        curr_track = track
+        curr_index = dataset_index
         
         print("="*50)
         print(f"Planning {track_idx_name}")
@@ -237,8 +246,9 @@ if __name__ == "__main__":
     
     parser.add_argument("-a", "--algo", type=str, choices=["peva", "waypoint"], default="waypoint", help="Planning algorithm")
     parser.add_argument("--use_leafxyz_as_cost", action='store_true', help="Uses the metric(leaf-xyz) instead of a normal cost_fn")
+    parser.add_argument("--goal_timestep_offset", type=int, default=None, help="Goal timestep offset")
     parser.add_argument("--shuffle", action="store_true", help="Shuffle the dataset")
-
+    
     parser.add_argument("-n", "--num_samples", type=int, default=32, help="Number of samples")
     parser.add_argument("-t", "--topk", type=int, default=4, help="Top k samples")
     parser.add_argument("-v", "--var_scale", type=float, default=0.5, help="Variance scale")
@@ -246,11 +256,9 @@ if __name__ == "__main__":
     parser.add_argument("-e", "--eval_every", type=int, default=1, help="Evaluation frequency")
     parser.add_argument("-H", "--horizon", type=int, default=1, help="Time horizon")
     parser.add_argument("-N", "--num_eval_samples", type=int, default=1, help="Number of evaluation samples")
-
+    
     parser.add_argument("--keep_nonvisible_goal", action="store_true", help="Keep non-visible goal in the dataset")
-    parser.add_argument("--min_dist_cat", type=int, default=8, help="Minimum goal distance in frames")
-    parser.add_argument("--max_dist_cat", type=int, default=8, help="Maximum goal distance in frames (max 32 given projection window)")
-    parser.add_argument("--curr_time_stride", type=int, default=1, help="Stride when iterating start times during split building")
+    parser.add_argument("--min_index_goal", type=int, default=0, help="Minimum index of the goal to plan")
     parser.add_argument("--min_dist_threshold", type=float, default=0.1, help="Minimum distance threshold")
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")
     parser.add_argument("--no_wandb", action="store_true", help="Don't use wandb")
