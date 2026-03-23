@@ -27,6 +27,7 @@ from planning.nymeria_dataset import NymeriaPlanningDataset, build_planning_spli
 from planning.wrappers import EvaluatorPeva, EvaluatorWaypoint, ObjectiveDreamSIM, PevaWM, Preprocessor, WaypointWM
 from planning.vis_utils import load_camera_model, get_T_C_pelvis, draw_image_coords, disable_logging
 
+from vint_train.training.nymeria_training_utils import set_gaussian_stats
 from train_ddp import init_distributed
 
 def build_peva_cem(args, wandb_run, log_dir, device):
@@ -168,10 +169,11 @@ def main(args):
         context_size=context_size,
         goal_type=nomad_config.get("goal_type", None),
         waypoint_spacing=data_config.get("waypoint_spacing", 1),
+        gaussian_normalization_stats_path=data_config.get("gaussian_normalization_stats_path", None),
     )
     shuffle = args.shuffle
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle, seed=seed)
-    dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=1)
+    dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=0)
 
     count = 0
     for idx, batch in enumerate(dataloader):

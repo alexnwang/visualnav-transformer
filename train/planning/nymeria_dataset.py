@@ -16,6 +16,7 @@ Compared with ViNT_Nymeria_Dataset this class:
   - caches ep_info.pt per trajectory to avoid redundant disk I/O
 """
 
+import json
 import os
 import pickle
 from typing import List, Optional, Tuple
@@ -27,7 +28,7 @@ from torchvision.utils import draw_keypoints
 
 from vint_train.data.data_utils import get_data_path, img_path_to_data, to_local_coords_3d
 from vint_train.data.misc import XSensConstants
-from vint_train.training.nymeria_training_utils import get_delta_smpl
+from vint_train.training.nymeria_training_utils import get_delta_smpl, normalize_data_smpl_pose_gaussian, set_gaussian_stats
 
 # ---------------------------------------------------------------------------
 # Pose helpers (standalone versions of ViNT_Nymeria_Dataset internals)
@@ -304,6 +305,7 @@ class NymeriaPlanningDataset(Dataset):
         goal_type: Optional[str] = None,
         waypoint_spacing: int = 1,
         obs_type: str = "png",
+        gaussian_normalization_stats_path: str = None,
     ):
         with open(tasks_file, "rb") as f:
             self.tasks: List[dict] = pickle.load(f)
@@ -315,7 +317,28 @@ class NymeriaPlanningDataset(Dataset):
         self.waypoint_spacing = waypoint_spacing
         self.obs_type = obs_type
         self._traj_cache: dict = {}
-
+        self.gaussian_normalization_stats_path = gaussian_normalization_stats_path
+        
+        if gaussian_normalization_stats_path is not None:
+            f = None
+            try:
+                f = open(gaussian_normalization_stats_path)
+            except FileNotFoundError:
+                print("action stats not found, using default values")
+            if f is not None:
+                stats_json = json.load(f)
+                stats_dict = {"mean": stats_json['pelvis_xyz']['mean'], "var": stats_json['pelvis_xyz']['var']}
+                
+                for part_name in XSensConstants.part_names[:XSensConstants.upper_body_num_parts]:
+                    stats_dict["mean"] += stats_json['rpy'][part_name]['mean']
+                    stats_dict["var"] += stats_json['rpy'][part_name]['var']
+                
+                self.ACTION_STATS = {
+                    "mean": torch.tensor(stats_dict["mean"], dtype=torch.float32),
+                    "var": torch.tensor(stats_dict["var"], dtype=torch.float32)
+                }
+                set_gaussian_stats(self.ACTION_STATS)
+    
     def __len__(self) -> int:
         return len(self.tasks)
 
@@ -400,7 +423,7 @@ class NymeriaPlanningDataset(Dataset):
         }
 
         if "xsens_offsets" in traj_data:
-            ret["xsens_offsets"] = traj_data["xsens_offsets"][:_NUM_SEG].float()
+            ret["xsens_offsets"] = traj_data["xsens_offsets"].float()
 
         return ret
 

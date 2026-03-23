@@ -176,4 +176,4 @@ def to_local_coords_3d(
         raise NotImplementedError
     positions_local = ((positions - curr_pos).unsqueeze(1) @ rotmat).squeeze(1)
     
-    return positions_local
+    return positions_local.to(dtype=positions.dtype)
