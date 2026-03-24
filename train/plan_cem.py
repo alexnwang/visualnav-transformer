@@ -26,6 +26,7 @@ from planning.utils import load_peva, load_policy
 from planning.nymeria_dataset import NymeriaPlanningDataset, build_planning_split
 from planning.wrappers import EvaluatorPeva, EvaluatorWaypoint, ObjectiveDreamSIM, PevaWM, Preprocessor, WaypointWM
 from planning.vis_utils import load_camera_model, get_T_C_pelvis, draw_image_coords, disable_logging
+from planning.plotting_fns import save_action_obs_sequence_viz
 
 from vint_train.training.nymeria_training_utils import set_gaussian_stats
 from train_ddp import init_distributed
@@ -206,9 +207,7 @@ def main(args):
         save_image(obs_images[0], f"{task_dir}/context_frames.png", nrow=obs_images.shape[1])
         save_image(goal_obs[0], f"{task_dir}/goal_obs.png")
         save_image(goal_image[0], f"{task_dir}/goal_image.png")
-        # GT trajectory frames
-        save_image(gt_frames[0], f"{task_dir}/gt_frames.png", nrow=gt_frames.shape[1])
-        # GT skeleton overlays on current observation
+        # GT action and observation sequence visualization
         curr_image = obs_images[0, -1]  # (3, H, W)
         n_steps = gt_frames.shape[1]
         gt_skel_imgs = []
@@ -218,9 +217,18 @@ def main(args):
             coords = gt_image_coords_seq[0, t]  # (23, 2)
             draw_image_coords(draw, coords[None])
             gt_skel_imgs.append(transforms.ToTensor()(img_pil))
-        save_image(torch.stack(gt_skel_imgs), f"{task_dir}/gt_skeleton_overlays.png", nrow=n_steps)
+        save_action_obs_sequence_viz(
+            save_path=f"{task_dir}/gt_action_obs_seq.png",
+            goal_image=goal_image[0],
+            curr_obs=curr_image,
+            goal_obs=goal_obs[0],
+            top_seq=torch.stack(gt_skel_imgs),
+            bot_seq=gt_frames[0],
+        )
         # Numerical data
         torch.save({
+            "dataset_index": dataset_index,
+            "track": track,
             "start_index": start_index,
             "goal_index": goal_index,
             "first_pose": first_pose[0],
