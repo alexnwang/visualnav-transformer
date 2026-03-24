@@ -255,7 +255,7 @@ class ObjectiveDreamSIM:
         gt_actions = get_action_smpl_torch(first_pose, gt_deltas, XSensConstants.upper_body_num_parts) # B, T, 48
         
         (xyz_dist_matrix, ang_dist_matrix, leaf_xyz, leaf_ang) = _compute_part_distance_matrices(pred_actions[:, -1], gt_actions[:, -1], skel)
-        _, _, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
+        _, ang_dist_matrix_init, leaf_xyz_init, leaf_ang_init = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
         
         goal_obs = goal_state["images"] # B, 3, H, W
         
@@ -297,9 +297,10 @@ class ObjectiveDreamSIM:
                               "objective-start_xyz_distance": leaf_xyz_init.mean().item()}
         else:
             return res, {"loss": res.mean().item(),
-                         "xyz_distance": leaf_xyz.mean().item(),
+                         "xyz_distance": xyz_dist_matrix.mean().item(),
                          "start_xyz_distance": leaf_xyz_init.mean().item(),
-                         "angular_distance": leaf_ang.mean().item()}
+                         "angular_distance": ang_dist_matrix.mean().item(),
+                         "start_angular_distance": ang_dist_matrix_init.mean().item()}
     
 class EvaluatorPeva(PevaWM):
     def __init__(self,
@@ -471,10 +472,14 @@ class EvaluatorWaypoint(WaypointWM):
             "all_xyz_min": all_xyz.min().item(),
             "all_xyz_init": all_xyz_init.mean().item(),
             # others
+            "gtwp.leaf_xyz": leaf_xyz_gt_waypoints.mean().item(),
+            "gtwp.leaf_xyz_min": leaf_xyz_gt_waypoints.min().item(),
             "gtwp.intermediate_xyz": gt_intermediate_xyz.mean().item(),
             "gtwp.intermediate_xyz_min": gt_intermediate_xyz.min().item(),
             "gtwp.all_xyz": gt_all_xyz.mean().item(),
             "gtwp.all_xyz_min": gt_all_xyz.min().item(),
+            "nowp.leaf_xyz": leaf_xyz_no_waypoints.mean().item(),
+            "nowp.leaf_xyz_min": leaf_xyz_no_waypoints.min().item(),
             "nowp.intermediate_xyz": no_intermediate_xyz.mean().item(),
             "nowp.intermediate_xyz_min": no_intermediate_xyz.min().item(),
             "nowp.all_xyz": no_all_xyz.mean().item(),
