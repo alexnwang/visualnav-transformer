@@ -79,10 +79,11 @@ class CEMPlanner(BasePlanner):
         os.makedirs(log_dir, exist_ok=True)
         
         self.accum_metrics = defaultdict(list)
-        
+
         self.accum_objective_metric_dicts = {}
         self.accum_eval_metric_dicts = {}
         self.accum_eval_other_vals = {}
+        self.accum_task_dicts = {}
 
     def init_mu_sigma(self, obs_0, actions=None):
         """
@@ -171,7 +172,16 @@ class CEMPlanner(BasePlanner):
         self.accum_objective_metric_dicts[task_name] = defaultdict(list)
         self.accum_eval_metric_dicts[task_name] = defaultdict(list)
         self.accum_eval_other_vals[task_name] = defaultdict(list)
-        
+
+        if self.evaluator is not None:
+            task_metrics, gtwp_metrics, nowp_metrics = self.evaluator.eval_task(trans_obs_0, z_obs_g)
+            self.accum_task_dicts[task_name] = {"task": task_metrics, "task_gtwp": gtwp_metrics, "task_nowp": nowp_metrics}
+            if self.wandb_run is not None:
+                task_log = {f"task/{k}": v for k, v in task_metrics.items()}
+                task_log.update({f"task_gtwp/{k}": v for k, v in gtwp_metrics.items()})
+                task_log.update({f"task_nowp/{k}": v for k, v in nowp_metrics.items()})
+                self.wandb_run.log(task_log, commit=True)
+
         for i in range(self.opt_steps):
             # optimize individual instances
             losses = []
@@ -250,10 +260,20 @@ class CEMPlanner(BasePlanner):
                     {f"{tag}/{k}": np.mean(v) for k, v in accum_dict.items()}, commit=False
                 )
         if self.wandb_run is not None:
+            for prefix in ["task", "task_gtwp", "task_nowp"]:
+                accum_task_dict = defaultdict(list)
+                for tn in self.accum_task_dicts.keys():
+                    for k, v in self.accum_task_dicts[tn][prefix].items():
+                        accum_task_dict[k].append(v)
+                if accum_task_dict:
+                    self.wandb_run.log(
+                        {f"accum_{prefix}/{k}": np.mean(v) for k, v in accum_task_dict.items()}, commit=False
+                    )
             self.wandb_run.log({}, commit=True)
 
         # dump all the accumulated metrics and other values
         torch.save(self.accum_objective_metric_dicts, f"{self.log_dir}/accum_objective_metric_dicts.pth")
         torch.save(self.accum_eval_metric_dicts, f"{self.log_dir}/accum_eval_metric_dicts.pth")
         torch.save(self.accum_eval_other_vals, f"{self.log_dir}/accum_eval_other_vals.pth")
+        torch.save(self.accum_task_dicts, f"{self.log_dir}/accum_task_dicts.pth")
         return mu
