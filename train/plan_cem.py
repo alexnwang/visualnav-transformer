@@ -25,7 +25,7 @@ from planning.cem import CEMPlanner
 from planning.utils import load_peva, load_policy
 from planning.nymeria_dataset import NymeriaPlanningDataset, build_planning_split
 from planning.wrappers import EvaluatorPeva, EvaluatorWaypoint, ObjectiveDreamSIM, PevaWM, Preprocessor, WaypointWM
-from planning.vis_utils import load_camera_model, get_T_C_pelvis, draw_image_coords, disable_logging
+from planning.vis_utils import draw_image_coords, disable_logging
 from planning.plotting_fns import save_action_obs_sequence_viz
 
 from vint_train.training.nymeria_training_utils import set_gaussian_stats
@@ -125,9 +125,8 @@ def main(args):
     else:
         wandb_run = wandb.init(project="peva-planning", name=run_name)
 
-    if args.nymeria_raw_dir:
-        disable_logging()
-    nymeria_dp_cache = {}  # track_name -> (NymeriaDataProvider, cam_model)
+    disable_logging()
+    camera_data_cache = {}  # track_name -> camera_data dict (lazy-loaded from camera_data.pt)
     
     log_dir = f"logs/cem/{datetime_str}:{run_name}"
     # Only create log directory from rank 0 to avoid race conditions
@@ -237,21 +236,18 @@ def main(args):
             "deltas": deltas[0],
         }, f"{task_dir}/task_data.pth")
 
-        # --- NymeriaDataProvider for skeleton projection ---
-        if args.nymeria_raw_dir:
-            if track not in nymeria_dp_cache:
-                from nymeria.data_provider import NymeriaDataProvider
-                nymeria_dp_cache[track] = (
-                    NymeriaDataProvider(
-                        sequence_rootdir=Path(os.path.join(args.nymeria_raw_dir, track)),
-                        load_wrist=False, load_observer=False,
-                    ),
-                    load_camera_model(args.nymeria_raw_dir, track),
-                )
-            nymeria_dp, cam_model = nymeria_dp_cache[track]
-            T_C_pelvis = get_T_C_pelvis(nymeria_dp, start_index)
+        # --- Camera params for skeleton projection ---
+        if args.camera_data_folder:
+            if track not in camera_data_cache:
+                cam_path = os.path.join(args.camera_data_folder, track, "camera_data.pt")
+                camera_data_cache[track] = torch.load(cam_path, weights_only=False)
+            cam_data = camera_data_cache[track]
+            T_mat = cam_data["T_C_pelvis"][start_index]  # (4, 4)
+            fisheye_params = cam_data["fisheye_params"]
+            R_C_pelvis = T_mat[:3, :3]
+            t_C_pelvis = T_mat[:3, 3]
         else:
-            cam_model, T_C_pelvis = None, None
+            fisheye_params, R_C_pelvis, t_C_pelvis = None, None, None
 
         obs_0 = {"images": obs_images,
                  "goal_image": goal_image,
@@ -263,7 +259,7 @@ def main(args):
                  "goal_image_coords": goal_image_coords}
 
         cem_planner.plan(obs_0, obs_g, track_idx_name, actions=action_init,
-                         cam_model=cam_model, T_C_pelvis=T_C_pelvis)
+                         fisheye_params=fisheye_params, R_C_pelvis=R_C_pelvis, t_C_pelvis=t_C_pelvis)
         count += 1
         if args.num_samples_to_plan > 0 and count > args.num_samples_to_plan: break
         
@@ -313,8 +309,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")
     parser.add_argument("--no_wandb", action="store_true", help="Don't use wandb")
     parser.add_argument("--test", action="store_true", help="Test run")
-    parser.add_argument("--nymeria_raw_dir", type=str, default=None,
-                        help="Path to raw Nymeria data (for skeleton overlay projection). "
+    parser.add_argument("--camera_data_folder", type=str,
+                        default="/home/anw2067/scratch/nymeria_visibility_matrix",
+                        help="Root directory containing per-track camera_data.pt files. "
                              "If not provided, skeleton overlays are skipped.")
     
     parser.add_argument("--peva_config", type=str, default="/home/anw2067/visualnav-transformer/train/peva/config/nymeria_rel_concat_embedding_compile_beta095_ar_model_context_16_bs_16_smpl_lowebody_-64to_64_1_goal_emb_relative_xxl.yaml")

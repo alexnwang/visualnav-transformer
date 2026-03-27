@@ -14,26 +14,27 @@ from planning.utils import _compute_pose_and_loss, _compute_part_distance_matric
 from planning.sampling import peva_sample, waypoint_sample
 
 def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
-                           cam_model, T_C_pelvis, image_size, T):
+                           fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T):
     """
     Build a (T, 3, H, W) sequence of curr_obs with skeleton overlays per timestep.
-    If cam_model/T_C_pelvis are None, returns blank (zero) frames.
+    If fisheye_params/R_C_pelvis/t_C_pelvis are None, returns blank (zero) frames.
 
     Args:
-        curr_obs_img: (3, H, W) current observation image
-        pred_deltas:  (1, T, action_dim) action deltas (batch-of-1)
-        first_pose:   (1, 1, action_dim) starting pose (batch-of-1)
-        xsens_offsets: (15, 3) skeleton joint offsets
-        cam_model:    camera calibration, or None to skip
-        T_C_pelvis:   SE3 pelvis→camera transform, or None to skip
-        image_size:   int, spatial size of images
-        T:            number of timesteps
+        curr_obs_img:   (3, H, W) current observation image
+        pred_deltas:    (1, T, action_dim) action deltas (batch-of-1)
+        first_pose:     (1, 1, action_dim) starting pose (batch-of-1)
+        xsens_offsets:  (15, 3) skeleton joint offsets
+        fisheye_params: (15,) Fisheye624 intrinsics, or None to skip
+        R_C_pelvis:     (3, 3) rotation pelvis→camera, or None to skip
+        t_C_pelvis:     (3,)   translation pelvis→camera, or None to skip
+        image_size:     int, spatial size of images
+        T:              number of timesteps
     Returns:
         top_seq: (T, 3, H, W) tensor
     """
     device = curr_obs_img.device
-    if cam_model is not None and T_C_pelvis is not None:
-        from planning.vis_utils import pose_to_image_coords, draw_image_coords as draw_skel
+    if fisheye_params is not None and R_C_pelvis is not None and t_C_pelvis is not None:
+        from planning.vis_utils import pose_to_image_coords_v2, draw_image_coords as draw_skel
         from torchvision import transforms as T_transforms
 
         pred_actions = get_action_smpl_torch(
@@ -43,11 +44,12 @@ def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
         skel_tensors = []
         for t in range(pred_actions.shape[1]):
             img_pil = Image.fromarray(
-                (255.0 * curr_obs_img.permute(1, 2, 0)).to(torch.uint8).numpy()
+                (255.0 * curr_obs_img.permute(1, 2, 0)).to(torch.uint8).cpu().numpy()
             )
             draw = ImageDraw.Draw(img_pil)
-            image_coords = pose_to_image_coords(
-                pred_actions[:, t], cam_model, xsens_offsets, T_C_pelvis, image_size=image_size
+            image_coords = pose_to_image_coords_v2(
+                pred_actions[:, t], R_C_pelvis, t_C_pelvis, fisheye_params,
+                xsens_offsets, image_size=image_size
             )  # (1, 15, 2)
             draw_skel(draw, image_coords)
             skel_tensors.append(T_transforms.ToTensor()(img_pil))
@@ -56,21 +58,23 @@ def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
         return torch.zeros(T, *curr_obs_img.shape).to(device)
 
 
-def save_mu_step_results(mu_rollout_state, state_0, state_g, cam_model, T_C_pelvis, save_path):
+def save_mu_step_results(mu_rollout_state, state_0, state_g,
+                         fisheye_params, R_C_pelvis, t_C_pelvis, save_path):
     """
     Save per-iteration mu evaluation artifacts:
       - action_obs_seq.png: 2-row visualization
           top: [policy input goal | curr_obs+skel t=1 | ... | curr_obs+skel t=T | blank]
                policy input goal = curr_obs+predicted waypoints (waypoint CEM) or plain curr_obs (peva)
-               skeleton overlays are blank if cam_model/T_C_pelvis not provided
+               skeleton overlays are blank if camera params not provided
           bot: [curr_obs | generated_obs t=1 | ... | generated_obs t=T | goal_obs]
 
     Args:
         mu_rollout_state: output of wm.rollout(state_0, mu) — generated_obs, deltas, goal_images
         state_0: transformed initial observation dict (trans_obs_0)
         state_g: encoded goal state dict (z_obs_g)
-        cam_model: camera calibration (from NymeriaDataProvider), or None to skip skeleton vis
-        T_C_pelvis: SE3 transform pelvis→camera at curr_time, or None to skip skeleton vis
+        fisheye_params: (15,) Fisheye624 intrinsics, or None to skip skeleton vis
+        R_C_pelvis: (3, 3) rotation pelvis→camera, or None to skip skeleton vis
+        t_C_pelvis: (3,) translation pelvis→camera, or None to skip skeleton vis
         save_path: directory to write artifacts into
     """
     os.makedirs(save_path, exist_ok=True)
@@ -88,7 +92,7 @@ def save_mu_step_results(mu_rollout_state, state_0, state_g, cam_model, T_C_pelv
     image_size    = state_0["images"].shape[-1]
     top_seq = build_skeleton_top_seq(
         curr_obs_img, pred_deltas, first_pose, xsens_offsets,
-        cam_model, T_C_pelvis, image_size, T
+        fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T
     )
 
     # top-left: curr_obs + predicted waypoints (waypoint CEM) or plain curr_obs (peva)
@@ -238,7 +242,7 @@ class ObjectiveDreamSIM:
         self.save_dir = save_dir
     
     def __call__(self, cem_step, rollout_state, state_0, goal_state, save_path=None, topk=0,
-                 cam_model=None, T_C_pelvis=None):
+                 fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None):
         first_pose = goal_state["first_pose"] # B, 1, policy_action_dim
         deltas = rollout_state["deltas"] # B, W*policy_pred_horizon, policy_action_dim
         gt_deltas = goal_state["deltas"] # B, T, policy_action_dim
@@ -278,7 +282,7 @@ class ObjectiveDreamSIM:
                 image_size = curr_obs.shape[-1]
                 top_seq_i = build_skeleton_top_seq(
                     curr_obs[i, -1], deltas[i:i+1], first_pose[i:i+1], xsens_offsets,
-                    cam_model, T_C_pelvis, image_size, T
+                    fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T
                 )
                 policy_input_goal_i = rollout_waypoint_annotated_obs[i, 0] if rollout_waypoint_annotated_obs is not None else curr_obs[i, -1]
                 save_action_obs_sequence_viz(
@@ -362,12 +366,12 @@ class EvaluatorPeva(PevaWM):
         return metrics, {}
 
     def eval_mu_step(self, cem_step, mu, mu_rollout_state, state_0, state_g,
-                     cam_model=None, T_C_pelvis=None, save_path=None):
+                     fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None, save_path=None):
         """Evaluate mu after a CEM iteration: compute metrics and save artifacts."""
         metrics, other_vals = self.eval_actions(cem_step, mu, state_0, state_g)
         if save_path is not None:
             save_mu_step_results(mu_rollout_state, state_0, state_g,
-                                 cam_model, T_C_pelvis, save_path)
+                                 fisheye_params, R_C_pelvis, t_C_pelvis, save_path)
         return metrics, other_vals
 
 
@@ -493,10 +497,10 @@ class EvaluatorWaypoint(WaypointWM):
         return metrics, other_vals
 
     def eval_mu_step(self, cem_step, mu, mu_rollout_state, state_0, state_g,
-                     cam_model=None, T_C_pelvis=None, save_path=None):
+                     fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None, save_path=None):
         """Evaluate mu after a CEM iteration: compute metrics and save artifacts."""
         metrics, other_vals = self.eval_actions(cem_step, mu, state_0, state_g)
         if save_path is not None:
             save_mu_step_results(mu_rollout_state, state_0, state_g,
-                                 cam_model, T_C_pelvis, save_path)
+                                 fisheye_params, R_C_pelvis, t_C_pelvis, save_path)
         return metrics, other_vals

@@ -152,7 +152,7 @@ class CEMPlanner(BasePlanner):
                 combined_metrics[key] = metrics_dict.get(key, 0.0)
         return combined_metrics
 
-    def plan(self, obs_0, obs_g, task_name, actions=None, cam_model=None, T_C_pelvis=None):
+    def plan(self, obs_0, obs_g, task_name, actions=None, fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None):
         """
         Args:
             actions: normalized
@@ -180,7 +180,7 @@ class CEMPlanner(BasePlanner):
                 task_log = {f"task/{k}": v for k, v in task_metrics.items()}
                 task_log.update({f"task_gtwp/{k}": v for k, v in gtwp_metrics.items()})
                 task_log.update({f"task_nowp/{k}": v for k, v in nowp_metrics.items()})
-                self.wandb_run.log(task_log, commit=True)
+                self.wandb_run.log(task_log, commit=False)
 
         for i in range(self.opt_steps):
             # optimize individual instances
@@ -211,7 +211,8 @@ class CEMPlanner(BasePlanner):
 
             step_dir = f"{self.log_dir}/{task_name}/step{i:03d}"
             loss, log_dict = self.objective_fn(i, i_state, curr_state_0, curr_latent_state_g,
-                                               save_path=step_dir, topk=self.topk)
+                                               save_path=step_dir, topk=self.topk,
+                                               fisheye_params=fisheye_params, R_C_pelvis=R_C_pelvis, t_C_pelvis=t_C_pelvis)
             topk_idx = torch.argsort(loss)[: self.topk]
             topk_action = action[topk_idx]
             losses.append(loss[topk_idx[0]].item())
@@ -233,7 +234,7 @@ class CEMPlanner(BasePlanner):
             if self.evaluator is not None:
                 metrics, other_vals = self.evaluator.eval_mu_step(
                     i, mu, mu_state, trans_obs_0, z_obs_g,
-                    cam_model=cam_model, T_C_pelvis=T_C_pelvis,
+                    fisheye_params=fisheye_params, R_C_pelvis=R_C_pelvis, t_C_pelvis=t_C_pelvis,
                     save_path=step_dir,
                 )
                 metrics["dreamsim"] = mu_dreamsim
@@ -245,7 +246,11 @@ class CEMPlanner(BasePlanner):
                 logs_tagged = {f"eval/{k}": v for k, v in {**metrics, **other_vals}.items()}
                 logs_tagged["step"] = i + 1
                 if self.wandb_run is not None:
-                    self.wandb_run.log(logs_tagged, commit=True)
+                    self.wandb_run.log(logs_tagged, commit=False)
+            
+            if self.wandb_run is not None:
+                self.wandb_run.log(task_log, commit=False) # always log task metrics alongside everything else
+                self.wandb_run.log({}, commit=True if i < self.opt_steps-1 else False)
     
         for k_steps in range(1, self.opt_steps + 1):
             accum_dict = defaultdict(list)
@@ -269,6 +274,8 @@ class CEMPlanner(BasePlanner):
                     self.wandb_run.log(
                         {f"accum_{prefix}/{k}": np.mean(v) for k, v in accum_task_dict.items()}, commit=False
                     )
+        
+        if self.wandb_run is not None:
             self.wandb_run.log({}, commit=True)
 
         # dump all the accumulated metrics and other values

@@ -32,6 +32,7 @@ from vint_train.training.train_eval_loop import (
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch
 from vint_train.data.vint_dataset import ViNT_Nymeria_Dataset
 from vint_train.training.train_utils import model_output
+from utilities.camera_projection import project_fisheye624_torch, rotate_aria_pixels_torch
 
 def disable_logging():
     # logger.disable(None)
@@ -114,8 +115,40 @@ def pose_to_image_coords(pose, cam_model, xsens_offsets, T_C_pelvis, image_size=
         res[b] = torch.stack(res[b], dim=0)
     image_coords = torch.stack(res, dim=0)
     return image_coords
-    
-    
+
+
+def pose_to_image_coords_v2(pose, R_C_pelvis, t_C_pelvis, fisheye_params, xsens_offsets, image_size=224) -> torch.Tensor:
+    """
+    Vectorized replacement for pose_to_image_coords (v2, uses pure-Python Fisheye624).
+
+    Args:
+        pose           : (B, 48)         SMPL pose tensor
+        R_C_pelvis     : (3, 3) tensor   rotation    pelvis → camera
+        t_C_pelvis     : (3,)   tensor   translation pelvis → camera
+        fisheye_params : (15,)  tensor   Fisheye624 intrinsics
+        xsens_offsets  : (J, 3) tensor   skeleton joint offsets
+        image_size     : int             output image resolution
+
+    Returns:
+        image_coords : (B, 15, 2) tensor; (-1, -1) for out-of-FOV joints
+    """
+
+    device = pose.device
+    xsens_skel = XsensSkeleton(offsets=xsens_offsets)
+    pose_xyz, _ = forward_kinematics_wrapper(pose, xsens_skel, XSensConstants.upper_body_num_parts, return_euler=True)  # B, 15, 3
+
+    pose_cam = torch.matmul(pose_xyz, R_C_pelvis.T.to(device=device, dtype=pose.dtype)) + t_C_pelvis.to(device=device, dtype=pose.dtype)  # B, 15, 3
+    B, J, _ = pose_cam.shape
+    flat = pose_cam.reshape(-1, 3)
+
+    pixels, valid = project_fisheye624_torch(flat, fisheye_params.to(device=device, dtype=pose.dtype))
+    rotated = rotate_aria_pixels_torch(pixels, image_size)
+
+    rotated = rotated.clone()
+    rotated[~valid] = -1.0
+    return rotated.reshape(B, J, 2)
+
+
 def get_T_C_pelvis(nymeria_dp, index):
     """
     nymeria_dp: NymeriaDataProvider
