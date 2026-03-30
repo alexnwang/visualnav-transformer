@@ -210,6 +210,8 @@ def load_policy(nomad_config_file, nomad_checkpoint, device='cpu'):
     def get_vision_encoder():
         if config.get("goal_type", None) in ["2d", "2d5050"]:
             goal_coordinate_dims = 8
+        elif config.get("goal_type", None) in ["3d5050"]:
+            goal_coordinate_dims = 12
         else:
             goal_coordinate_dims = 0
         vision_encoder = NoMaD_ViNT(

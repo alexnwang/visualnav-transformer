@@ -164,48 +164,61 @@ class PevaWM(WMWrapper):
                 "goal_images": None}
 
 class WaypointWM(WMWrapper):
-    def __init__(self,peva_model, peva_diffusion, peva_vae, peva_stats,
+    def __init__(self, peva_model, peva_diffusion, peva_vae, peva_stats,
                  policy_model, policy_diffusion,
-                 image_size, peva_context_size, 
+                 image_size, peva_context_size,
                  policy_context_size, policy_pred_horizon, policy_action_dim,
-                 skip_last_peva=False):
+                 skip_last_peva=False,
+                 waypoint_mode="waypoint"):
         super().__init__()
         self.peva_model = peva_model
         self.peva_diffusion = peva_diffusion
         self.peva_vae = peva_vae
         self.peva_stats = peva_stats
-        
+
         self.policy_model = policy_model
         self.policy_diffusion = policy_diffusion
-        
+
         self.image_size = image_size
         self.latent_size = image_size // 8
         self.peva_context_size = peva_context_size
         self.policy_context_size = policy_context_size
-        
+
         self.policy_pred_horizon = policy_pred_horizon
         self.policy_action_dim = policy_action_dim
-        
+
         self.skip_last_peva = skip_last_peva
-        
+        self.waypoint_mode = waypoint_mode
+
         self.sample_fn = partial(
             waypoint_sample,
             policy_model=policy_model, policy_diffusion=policy_diffusion,
             peva_model=peva_model, peva_diffusion=peva_diffusion, peva_vae=peva_vae, peva_stats=peva_stats,
             policy_pred_horizon=policy_pred_horizon, policy_action_dim=policy_action_dim,
-            image_size=image_size, 
+            image_size=image_size,
             policy_context_size=policy_context_size, peva_context_size=peva_context_size, peva_latent_size=self.latent_size,
-            skip_last_peva=skip_last_peva
+            skip_last_peva=skip_last_peva,
+            waypoint_mode=waypoint_mode,
         )
-    
+
+    def _scale_waypoints(self, act):
+        """Convert normalized action coords to pixel/metric space.
+        For waypoint_point3d, only x,y dims are scaled to pixels; depth is left as-is."""
+        if self.waypoint_mode == "waypoint_point3d":
+            waypoints = act.reshape(*act.shape[:-1], 4, 3).clone()
+            waypoints[..., :2] *= self.image_size
+            return waypoints.flatten(-2, -1)
+        else:
+            return act * self.image_size
+
     def rollout(self, state_0, act):
         device = act.device
         curr_obs = state_0['images'] # B, peva_context_size, 3, H, W
         goal_obs = state_0['goal_image'] # B, 3, H, W
         context_poses = state_0['context_poses'] # B, peva_context_size, 48
-        
-        waypoints = act * self.image_size
-        
+
+        waypoints = self._scale_waypoints(act)
+
         (
             generated_frames, # B, W, policy_pred_horizon, 3, H, W
             policy_sampled_deltas, # B, W, policy_pred_horizon, policy_action_dim
@@ -214,11 +227,12 @@ class WaypointWM(WMWrapper):
                     self.peva_model, self.peva_diffusion, self.peva_vae, self.peva_stats,
                     waypoints, context_poses, curr_obs, goal_obs,
                     self.policy_pred_horizon, self.policy_action_dim,
-                    self.image_size, 
+                    self.image_size,
                     self.policy_context_size, self.peva_context_size, self.latent_size,
                     device,
-                    skip_last_peva=self.skip_last_peva)
-        
+                    skip_last_peva=self.skip_last_peva,
+                    waypoint_mode=self.waypoint_mode)
+
         return {"generated_obs": generated_frames.to(torch.float32).flatten(1,2),
                 "deltas": policy_sampled_deltas.to(torch.float32).flatten(1,2),
                 "goal_images": waypoint_annotated_goals.to(torch.float32)}
@@ -405,7 +419,7 @@ class EvaluatorWaypoint(WaypointWM):
         deltas_gt = state_g["deltas"]
         first_pose = state_g["first_pose"]  # B, 1, 48
 
-        gt_waypoints = goal_image_coords[:, :XSensConstants.upper_body_num_parts][:, leaf_indexer].flatten(1, 2)[:, None]
+        B = curr_obs.shape[0]
         num_joints_visible = (goal_image_coords[:, XSensConstants.leaf_indices] != -1).all(dim=-1).float().sum(dim=-1)
 
         gt_actions = get_action_smpl_torch(first_pose, deltas_gt, XSensConstants.upper_body_num_parts)
@@ -413,48 +427,69 @@ class EvaluatorWaypoint(WaypointWM):
         intermediate_xyz_init = init_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
         all_xyz_init = init_xyz_dist_matrix.mean(dim=-1)
 
-        gt_waypoint_deltas = self.sample_fn(waypoints=gt_waypoints, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1, 2)
-        gt_waypoint_actions = get_action_smpl_torch(first_pose, gt_waypoint_deltas, XSensConstants.upper_body_num_parts)
-        gt_waypoint_xyz_dist_matrix, _, leaf_xyz_gt_waypoints, _ = _compute_part_distance_matrices(gt_waypoint_actions[:, -1], gt_actions[:, -1], skel)
-        gt_intermediate_xyz = gt_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
-        gt_all_xyz = gt_waypoint_xyz_dist_matrix.mean(dim=-1)
-
-        no_waypoint_deltas = self.sample_fn(waypoints=torch.ones_like(gt_waypoints) * -1, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1, 2)
-        no_waypoint_actions = get_action_smpl_torch(first_pose, no_waypoint_deltas, XSensConstants.upper_body_num_parts)
-        no_waypoint_xyz_dist_matrix, _, leaf_xyz_no_waypoints, _ = _compute_part_distance_matrices(no_waypoint_actions[:, -1], gt_actions[:, -1], skel)
-        no_intermediate_xyz = no_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
-        no_all_xyz = no_waypoint_xyz_dist_matrix.mean(dim=-1)
-
         task_metrics = {
             "leaf_xyz_init": leaf_xyz_init.mean().item(),
             "intermediate_xyz_init": intermediate_xyz_init.mean().item(),
             "all_xyz_init": all_xyz_init.mean().item(),
             "num_joints_visible": num_joints_visible.mean().item(),
         }
-        gtwp_metrics = {
-            "leaf_xyz": leaf_xyz_gt_waypoints.mean().item(),
-            "leaf_xyz_min": leaf_xyz_gt_waypoints.min().item(),
-            "intermediate_xyz": gt_intermediate_xyz.mean().item(),
-            "intermediate_xyz_min": gt_intermediate_xyz.min().item(),
-            "all_xyz": gt_all_xyz.mean().item(),
-            "all_xyz_min": gt_all_xyz.min().item(),
-        }
-        nowp_metrics = {
-            "leaf_xyz": leaf_xyz_no_waypoints.mean().item(),
-            "leaf_xyz_min": leaf_xyz_no_waypoints.min().item(),
-            "intermediate_xyz": no_intermediate_xyz.mean().item(),
-            "intermediate_xyz_min": no_intermediate_xyz.min().item(),
-            "all_xyz": no_all_xyz.mean().item(),
-            "all_xyz_min": no_all_xyz.min().item(),
-        }
-        return task_metrics, gtwp_metrics, nowp_metrics
+
+        if self.waypoint_mode == "waypoint_point3d":
+            # gt 3D waypoints not yet available; nowp uses all-(-1) goal_coordinates
+            no_waypoints = torch.ones(B, 1, 12, device=device) * -1
+            no_waypoint_deltas = self.sample_fn(waypoints=no_waypoints, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1, 2)
+            no_waypoint_actions = get_action_smpl_torch(first_pose, no_waypoint_deltas, XSensConstants.upper_body_num_parts)
+            no_waypoint_xyz_dist_matrix, _, leaf_xyz_no_waypoints, _ = _compute_part_distance_matrices(no_waypoint_actions[:, -1], gt_actions[:, -1], skel)
+            no_intermediate_xyz = no_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
+            no_all_xyz = no_waypoint_xyz_dist_matrix.mean(dim=-1)
+            nowp_metrics = {
+                "leaf_xyz": leaf_xyz_no_waypoints.mean().item(),
+                "leaf_xyz_min": leaf_xyz_no_waypoints.min().item(),
+                "intermediate_xyz": no_intermediate_xyz.mean().item(),
+                "intermediate_xyz_min": no_intermediate_xyz.min().item(),
+                "all_xyz": no_all_xyz.mean().item(),
+                "all_xyz_min": no_all_xyz.min().item(),
+            }
+            return task_metrics, {}, nowp_metrics
+        else:
+            gt_waypoints = goal_image_coords[:, :XSensConstants.upper_body_num_parts][:, leaf_indexer].flatten(1, 2)[:, None]
+
+            gt_waypoint_deltas = self.sample_fn(waypoints=gt_waypoints, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1, 2)
+            gt_waypoint_actions = get_action_smpl_torch(first_pose, gt_waypoint_deltas, XSensConstants.upper_body_num_parts)
+            gt_waypoint_xyz_dist_matrix, _, leaf_xyz_gt_waypoints, _ = _compute_part_distance_matrices(gt_waypoint_actions[:, -1], gt_actions[:, -1], skel)
+            gt_intermediate_xyz = gt_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
+            gt_all_xyz = gt_waypoint_xyz_dist_matrix.mean(dim=-1)
+
+            no_waypoint_deltas = self.sample_fn(waypoints=torch.ones_like(gt_waypoints) * -1, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1, 2)
+            no_waypoint_actions = get_action_smpl_torch(first_pose, no_waypoint_deltas, XSensConstants.upper_body_num_parts)
+            no_waypoint_xyz_dist_matrix, _, leaf_xyz_no_waypoints, _ = _compute_part_distance_matrices(no_waypoint_actions[:, -1], gt_actions[:, -1], skel)
+            no_intermediate_xyz = no_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
+            no_all_xyz = no_waypoint_xyz_dist_matrix.mean(dim=-1)
+
+            gtwp_metrics = {
+                "leaf_xyz": leaf_xyz_gt_waypoints.mean().item(),
+                "leaf_xyz_min": leaf_xyz_gt_waypoints.min().item(),
+                "intermediate_xyz": gt_intermediate_xyz.mean().item(),
+                "intermediate_xyz_min": gt_intermediate_xyz.min().item(),
+                "all_xyz": gt_all_xyz.mean().item(),
+                "all_xyz_min": gt_all_xyz.min().item(),
+            }
+            nowp_metrics = {
+                "leaf_xyz": leaf_xyz_no_waypoints.mean().item(),
+                "leaf_xyz_min": leaf_xyz_no_waypoints.min().item(),
+                "intermediate_xyz": no_intermediate_xyz.mean().item(),
+                "intermediate_xyz_min": no_intermediate_xyz.min().item(),
+                "all_xyz": no_all_xyz.mean().item(),
+                "all_xyz_min": no_all_xyz.min().item(),
+            }
+            return task_metrics, gtwp_metrics, nowp_metrics
 
     def eval_actions(self, cem_step, actions_mu, state_0, state_g):
         device = actions_mu.device
         xsens_offsets = state_g["xsens_offsets"][0]
         skel = XsensSkeleton(xsens_offsets)
 
-        waypoints = actions_mu * self.image_size
+        waypoints = self._scale_waypoints(actions_mu)
         context_poses = state_0['context_poses']
         curr_obs = state_0['images']
         goal_obs = state_0['goal_image']
@@ -479,8 +514,11 @@ class EvaluatorWaypoint(WaypointWM):
         intermediate_xyz = xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
         all_xyz = xyz_dist_matrix.mean(dim=-1)
 
-        wpts_ = waypoints.unflatten(-1, (4, 2))
-        avg_num_waypoints_visible = torch.logical_and(wpts_ < self.image_size, wpts_ > 0.).all(dim=-1).float().sum(dim=-1)
+        if self.waypoint_mode == "waypoint_point3d":
+            wpts_xy = waypoints.unflatten(-1, (4, 3))[..., :2]  # B, W, 4, 2
+        else:
+            wpts_xy = waypoints.unflatten(-1, (4, 2))  # B, W, 4, 2
+        avg_num_waypoints_visible = torch.logical_and(wpts_xy < self.image_size, wpts_xy > 0.).all(dim=-1).float().sum(dim=-1)
 
         metrics = {
             "leaf_xyz": leaf_xyz.mean().item(),

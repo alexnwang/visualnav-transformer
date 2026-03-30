@@ -30,12 +30,11 @@ def waypoint_sample(policy_model, policy_diffusion,
                     peva_model, peva_diffusion, peva_vae, peva_stats,
                     waypoints, context_poses, curr_obs, goal_obs,
                     policy_pred_horizon, policy_action_dim,
-                    image_size, 
+                    image_size,
                     policy_context_size, peva_context_size, peva_latent_size,
                     device,
                     skip_last_peva=False,
-                    gt_deltas=None,
-                    first_pose=None):
+                    waypoint_mode="waypoint"):
     imagenet_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     wm_norm = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     
@@ -52,14 +51,23 @@ def waypoint_sample(policy_model, policy_diffusion,
     for w in range(W):
         policy_obs = imagenet_norm(curr_obs[:, -policy_context_size:].flatten(0, 1)).unflatten(0, (B, policy_context_size))
         # goal_obs = imagenet_norm(curr_obs[:, -1])
-        goal_obs_accum[:, w] = goal_obs = draw_waypoints(curr_obs[:, -1], waypoints[:, w])
-        goal_obs = imagenet_norm(goal_obs)
-        # goal_obs = imagenet_norm(goal_obs)
-        
+        if waypoint_mode == "waypoint_point3d":
+            # waypoints[:, w]: B, 12 (4 points × [x, y, depth])
+            # Draw x,y coords for visualization only; feed raw image + coords to model
+            xy_waypoints = waypoints[:, w].reshape(-1, 4, 3)[:, :, :2]  # B, 4, 2
+            goal_obs_accum[:, w] = draw_waypoints(curr_obs[:, -1], xy_waypoints)
+            goal_obs = imagenet_norm(curr_obs[:, -1])
+            goal_coords = waypoints[:, w]  # B, 12
+        else:
+            goal_obs_accum[:, w] = draw_waypoints(curr_obs[:, -1], waypoints[:, w])
+            goal_obs = imagenet_norm(goal_obs_accum[:, w])
+            goal_coords = None
+
         deltas = policy_sample(policy_model, policy_diffusion,
                     policy_obs, goal_obs,
-                    curr_poses[:, -policy_context_size:], 
-                    policy_pred_horizon, policy_action_dim, device) # B, 8, 48
+                    curr_poses[:, -policy_context_size:],
+                    policy_pred_horizon, policy_action_dim, device,
+                    goal_coordinates=goal_coords) # B, 8, 48
         delta_accum[:, w] = deltas
         
         new_poses = get_action_smpl_torch(curr_poses[:, -1:], deltas, XSensConstants.upper_body_num_parts) # B, 8, 48
@@ -171,6 +179,7 @@ def policy_sample(
     pred_horizon: int,
     action_dim: int,
     device: torch.device,
+    goal_coordinates: torch.Tensor = None,
 ):
     """
     Generate model output (conditioned, unconditioned, distance) for the given batch of images.
@@ -185,7 +194,7 @@ def policy_sample(
                          obs_img=batch_obs_images,
                          goal_img=batch_goal_images, 
                          input_goal_mask=no_mask,
-                         context_poses=context_poses, goal_coordinates=None)
+                         context_poses=context_poses, goal_coordinates=goal_coordinates)
 
     # initialize action from Gaussian noise
     noisy_diffusion_output = torch.randn(

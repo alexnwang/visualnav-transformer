@@ -70,13 +70,21 @@ def build_waypoint_cem(args, wandb_run, log_dir, device):
     # construct wrappers and CEM planner
     wm_wrapper = WaypointWM(model, peva_diffusion, vae, peva_stats, policy, policy_diffusion,
                 nomad_config["image_size"][0], peva_config["context_size"], nomad_config["context_size"]+1,
-                nomad_config["len_traj_pred"], nomad_config["input_dims"])   
+                nomad_config["len_traj_pred"], nomad_config["input_dims"],
+                waypoint_mode=args.algo)
     evaluator = EvaluatorWaypoint(model, peva_diffusion, vae, peva_stats, policy, policy_diffusion,
                     nomad_config["image_size"][0], peva_config["context_size"], nomad_config["context_size"]+1,
                     nomad_config["len_traj_pred"], nomad_config["input_dims"],
-                    num_eval_samples=args.num_eval_samples)
+                    num_eval_samples=args.num_eval_samples,
+                    waypoint_mode=args.algo)
     objective_fn = ObjectiveDreamSIM(pred_horizon=nomad_config["len_traj_pred"], device=device, return_metric=args.use_leafxyz_as_cost)
     preprocessor = Preprocessor()
+    
+    if args.algo == "waypoint":
+        action_dim = 8
+    elif args.algo == "waypoint_point3d":
+        action_dim = 12
+    
     cem_planner = CEMPlanner(
         horizon=args.horizon,
         topk=args.topk,
@@ -84,7 +92,7 @@ def build_waypoint_cem(args, wandb_run, log_dir, device):
         var_scale=args.var_scale,
         opt_steps=args.opt_steps,
         wm=wm_wrapper,
-        action_dim=8,
+        action_dim=action_dim,
         objective_fn=objective_fn,
         preprocessor=preprocessor,
         evaluator=evaluator,
@@ -136,6 +144,12 @@ def main(args):
     device = 'cuda'
     if algo in "waypoint": 
         action_init = torch.ones(1, args.horizon, 8) * 0.5
+        cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir, device)
+    elif algo == "waypoint_point3d":
+        action_init = torch.cat([
+            torch.ones(1, args.horizon, 4, 2) * 0.5, # image coords
+            torch.ones(1, args.horizon, 4, 1) * 0.5 # depth coordinate
+        ], dim=-1).flatten(2,3)
         cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir, device)
     elif algo == "peva":
         action_init = None
@@ -277,6 +291,9 @@ MODEL_DIRECTORY={
         "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_03_22_01_13:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask/config.yaml",
         "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_03_22_01_13:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask/ema_9.pth"
     ),
+    "3d_mask": (
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_03_22_01_13:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goal3d5050-waypointMask/config.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_03_22_01_13:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goal3d5050-waypointMask/ema_9.pth"
     ),
     "heldout": (
         "/home/anw2067/visualnav-transformer/train/config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-heldoutEnvs.yaml",
@@ -291,7 +308,7 @@ MODEL_DIRECTORY={
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     
-    parser.add_argument("-a", "--algo", type=str, choices=["peva", "waypoint"], default="waypoint", help="Planning algorithm")
+    parser.add_argument("-a", "--algo", type=str, choices=["peva", "waypoint", "waypoint_point3d"], default="waypoint", help="Planning algorithm")
     parser.add_argument("--use_leafxyz_as_cost", action='store_true', help="Uses the metric(leaf-xyz) instead of a normal cost_fn")
     parser.add_argument("--shuffle", action="store_true", help="Shuffle the dataset")
 
