@@ -8,26 +8,59 @@ SLURM_HEADER="#!/bin/bash
 #SBATCH --tasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=h200
-#SBATCH --time=24:00:00
+#SBATCH --constraint=h200|h100
+#SBATCH --time=8:00:00
 #SBATCH --mem=100GB
 #SBATCH --output=/home/anw2067/slurm_logs/cem_final/plan_cem-%j.out
 #SBATCH --error=/home/anw2067/slurm_logs/cem_final/plan_cem-%j.err
 #SBATCH --account=torch_pr_230_tandon_advanced
 "
 
+
+# python plan_cem.py -a waypoint -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 100 --shuffle
+# python plan_cem.py -a waypoint3d -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model 3d_mask --rank 0 --world_size 1 --num_samples_to_plan 100 --shuffle
+
 ########################################################
-# 01/27 CEM heldout environments
+# 03/29, lets run a long horizon waypoint planning
 ########################################################
-world_size=2
+world_size=1
 for rank in $(seq 0 $((world_size - 1))); do
-sbatch <<EOF
+sbatch --time=24:00:00 <<EOF
 ${SLURM_HEADER}
-#SBATCH --job-name=plan-waypoint_cem-heldout-o6-n8-t4-v0.3-N64-ds64-rank${rank}
+#SBATCH --job-name=plan-waypoint_cem-heldout-o6-n8-H2-t4-v0.3-N64-ds250-rank${rank}
 cd /home/anw2067/visualnav-transformer/train
-python plan_cem.py -a waypoint -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask_heldout --rank ${rank} --world_size ${world_size} --num_samples_to_plan 100 --shuffle
+python plan_cem.py -a waypoint -o 6 -H 2 -n 64 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 250 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat 16 --max_dist_cat 16
 EOF
 done
+
+########################################################
+# 03/29, lets run a long horizon peva planning and a few more samples for waypoint to see if it improves.
+########################################################
+for distance in 12 16 20; do
+world_size=1
+for rank in $(seq 0 $((world_size - 1))); do
+sbatch --time=16:00:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=plan-peva_cem-heldout-o6-n8-H8-t2-v0.05-N64-ds64-dist${distance}-rank${rank}
+cd /home/anw2067/visualnav-transformer/train
+python plan_cem.py -a peva -o 6 -H ${distance} -n 8 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
+EOF
+done
+done
+
+for distance in 12 16 20; do
+world_size=1
+for rank in $(seq 0 $((world_size - 1))); do
+sbatch --time=16:00:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=plan-peva_cem-heldout-o6-n16-H8-t2-v0.05-N64-ds64-dist${distance}-rank${rank}
+cd /home/anw2067/visualnav-transformer/train
+python plan_cem.py -a peva -o 6 -H ${distance} -n 16 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
+EOF
+done
+done
+
+
 ########################################################
 # 03/26 2 runs to get a sense of waypoint vs waypoint_point3d
 ########################################################
