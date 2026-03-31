@@ -283,4 +283,14 @@ class CEMPlanner(BasePlanner):
         torch.save(self.accum_eval_metric_dicts, f"{self.log_dir}/accum_eval_metric_dicts.pth")
         torch.save(self.accum_eval_other_vals, f"{self.log_dir}/accum_eval_other_vals.pth")
         torch.save(self.accum_task_dicts, f"{self.log_dir}/accum_task_dicts.pth")
+
+        # per-task results file for cross-run aggregation
+        torch.save({
+            "task_name": task_name,
+            "eval_metrics": dict(self.accum_eval_metric_dicts[task_name]),
+            "eval_other_vals": dict(self.accum_eval_other_vals[task_name]),
+            "objective_metrics": dict(self.accum_objective_metric_dicts[task_name]),
+            "task_metrics": self.accum_task_dicts.get(task_name, {}),
+        }, f"{self.log_dir}/{task_name}/results.pth")
+
         return mu
