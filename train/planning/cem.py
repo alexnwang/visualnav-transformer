@@ -174,7 +174,7 @@ class CEMPlanner(BasePlanner):
         self.accum_eval_other_vals[task_name] = defaultdict(list)
 
         if self.evaluator is not None:
-            task_metrics, gtwp_metrics, nowp_metrics = self.evaluator.eval_task(trans_obs_0, z_obs_g)
+            task_metrics, gtwp_metrics, nowp_metrics = self.evaluator.eval_task(trans_obs_0, z_obs_g, mu, self.objective_fn)
             self.accum_task_dicts[task_name] = {"task": task_metrics, "task_gtwp": gtwp_metrics, "task_nowp": nowp_metrics}
             if self.wandb_run is not None:
                 task_log = {f"task/{k}": v for k, v in task_metrics.items()}
@@ -252,6 +252,7 @@ class CEMPlanner(BasePlanner):
                 self.wandb_run.log(task_log, commit=False) # always log task metrics alongside everything else
                 self.wandb_run.log({}, commit=True if i < self.opt_steps-1 else False)
     
+        current_task_name = task_name
         for k_steps in range(1, self.opt_steps + 1):
             accum_dict = defaultdict(list)
             for task_name in self.accum_eval_metric_dicts.keys():
@@ -286,11 +287,11 @@ class CEMPlanner(BasePlanner):
 
         # per-task results file for cross-run aggregation
         torch.save({
-            "task_name": task_name,
-            "eval_metrics": dict(self.accum_eval_metric_dicts[task_name]),
-            "eval_other_vals": dict(self.accum_eval_other_vals[task_name]),
-            "objective_metrics": dict(self.accum_objective_metric_dicts[task_name]),
-            "task_metrics": self.accum_task_dicts.get(task_name, {}),
-        }, f"{self.log_dir}/{task_name}/results.pth")
+            "task_name": current_task_name,
+            "eval_metrics": dict(self.accum_eval_metric_dicts[current_task_name]),
+            "eval_other_vals": dict(self.accum_eval_other_vals[current_task_name]),
+            "objective_metrics": dict(self.accum_objective_metric_dicts[current_task_name]),
+            "task_metrics": self.accum_task_dicts.get(current_task_name, {}),
+        }, f"{self.log_dir}/{current_task_name}/results.pth")
 
         return mu

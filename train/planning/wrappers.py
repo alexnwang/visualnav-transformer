@@ -210,6 +210,9 @@ class WaypointWM(WMWrapper):
             return waypoints.flatten(-2, -1)
         else:
             return act * self.image_size
+    
+    def set_skip_last_peva(self, skip_last_peva):
+        self.skip_last_peva = skip_last_peva
 
     def rollout(self, state_0, act):
         device = act.device
@@ -329,7 +332,7 @@ class EvaluatorPeva(PevaWM):
         
         self.num_eval_samples = num_eval_samples
     
-    def eval_task(self, state_0, state_g):
+    def eval_task(self, state_0, state_g, mu, objective_fn):
         """Compute per-task constant metrics (init baselines, visibility). Returns (task_metrics, {}, {})."""
         goal_image_coords = state_g['goal_image_coords']  # B, 23, 2
         xsens_offsets = state_g["xsens_offsets"][0]
@@ -343,11 +346,16 @@ class EvaluatorPeva(PevaWM):
         all_xyz_init = init_xyz_dist_matrix.mean(dim=-1)
         num_joints_visible = (goal_image_coords[:, XSensConstants.leaf_indices] != -1).all(dim=-1).float().sum(dim=-1)
 
+        with torch.no_grad():
+            mu_state = self.rollout(state_0=state_0, act=mu)
+        mu_loss, _ = objective_fn(-1, mu_state, state_0, state_g, save_path=None, topk=0)
+
         return {
             "leaf_xyz_init": leaf_xyz_init.mean().item(),
             "intermediate_xyz_init": intermediate_xyz_init.mean().item(),
             "all_xyz_init": all_xyz_init.mean().item(),
             "num_joints_visible": num_joints_visible.mean().item(),
+            "dreamsim_init": mu_loss[0].item(),
         }, {}, {}
 
     def eval_actions(self, cem_step, actions_mu, state_0, state_g):
@@ -403,7 +411,7 @@ class EvaluatorWaypoint(WaypointWM):
         if not self.skip_last_peva:
             print("WARNING: Evaluator is not skipping last PEVA rollout")
     
-    def eval_task(self, state_0, state_g):
+    def eval_task(self, state_0, state_g, mu, objective_fn):
         """Compute per-task constant metrics (init baselines, gtwp, nowp, visibility).
         Returns (task_metrics, gtwp_metrics, nowp_metrics)."""
         device = state_0['images'].device
@@ -427,11 +435,18 @@ class EvaluatorWaypoint(WaypointWM):
         intermediate_xyz_init = init_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
         all_xyz_init = init_xyz_dist_matrix.mean(dim=-1)
 
+        with torch.no_grad():
+            self.set_skip_last_peva(False)
+            mu_state = self.rollout(state_0=state_0, act=mu)
+            self.set_skip_last_peva(True)
+        mu_loss, _ = objective_fn(-1, mu_state, state_0, state_g, save_path=None, topk=0)
+
         task_metrics = {
             "leaf_xyz_init": leaf_xyz_init.mean().item(),
             "intermediate_xyz_init": intermediate_xyz_init.mean().item(),
             "all_xyz_init": all_xyz_init.mean().item(),
             "num_joints_visible": num_joints_visible.mean().item(),
+            "dreamsim_init": mu_loss[0].item(),
         }
 
         if self.waypoint_mode == "waypoint_point3d":
