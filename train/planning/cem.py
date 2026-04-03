@@ -182,6 +182,8 @@ class CEMPlanner(BasePlanner):
                 task_log.update({f"task_nowp/{k}": v for k, v in nowp_metrics.items()})
                 self.wandb_run.log(task_log, commit=False)
 
+        mu_history, sigma_history = [], []
+
         for i in range(self.opt_steps):
             # optimize individual instances
             losses = []
@@ -218,6 +220,8 @@ class CEMPlanner(BasePlanner):
             losses.append(loss[topk_idx[0]].item())
             mu = topk_action.mean(dim=0, keepdim=True)
             sigma = topk_action.std(dim=0, keepdim=True)
+            mu_history.append(mu.cpu().clone())
+            sigma_history.append(sigma.cpu().clone())
 
             for k, v in {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}.items():
                 self.accum_objective_metric_dicts[task_name][k].append(v)
@@ -292,6 +296,8 @@ class CEMPlanner(BasePlanner):
             "eval_other_vals": dict(self.accum_eval_other_vals[current_task_name]),
             "objective_metrics": dict(self.accum_objective_metric_dicts[current_task_name]),
             "task_metrics": self.accum_task_dicts.get(current_task_name, {}),
+            "mu_history": torch.stack(mu_history),
+            "sigma_history": torch.stack(sigma_history),
         }, f"{self.log_dir}/{current_task_name}/results.pth")
 
         return mu
