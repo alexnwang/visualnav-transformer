@@ -14,7 +14,8 @@ from planning.utils import _compute_pose_and_loss, _compute_part_distance_matric
 from planning.sampling import peva_sample, waypoint_sample
 
 def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
-                           fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T):
+                           fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T,
+                           overlay='skeleton', smpl_alpha=0.7):
     """
     Build a (T, 3, H, W) sequence of curr_obs with skeleton overlays per timestep.
     If fisheye_params/R_C_pelvis/t_C_pelvis are None, returns blank (zero) frames.
@@ -29,29 +30,44 @@ def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
         t_C_pelvis:     (3,)   translation pelvis→camera, or None to skip
         image_size:     int, spatial size of images
         T:              number of timesteps
+        overlay:        'skeleton', 'skin', or 'both'
+        smpl_alpha:     opacity of the SMPL mesh overlay (only used with skin)
     Returns:
         top_seq: (T, 3, H, W) tensor
     """
     device = curr_obs_img.device
     if fisheye_params is not None and R_C_pelvis is not None and t_C_pelvis is not None:
-        from planning.vis_utils import pose_to_image_coords_v2, draw_image_coords as draw_skel
         from torchvision import transforms as T_transforms
 
         pred_actions = get_action_smpl_torch(
             first_pose, pred_deltas, XSensConstants.upper_body_num_parts
         )  # (1, T, 48)
 
+        draw_skin = overlay in ('skin', 'both')
+        draw_skel = overlay in ('skeleton', 'both')
+
         skel_tensors = []
         for t in range(pred_actions.shape[1]):
-            img_pil = Image.fromarray(
-                (255.0 * curr_obs_img.permute(1, 2, 0)).to(torch.uint8).cpu().numpy()
-            )
-            draw = ImageDraw.Draw(img_pil)
-            image_coords = pose_to_image_coords_v2(
-                pred_actions[:, t], R_C_pelvis, t_C_pelvis, fisheye_params,
-                xsens_offsets, image_size=image_size
-            )  # (1, 15, 2)
-            draw_skel(draw, image_coords)
+            if draw_skin:
+                from planning.vis_utils import render_smpl_on_image
+                img_pil = render_smpl_on_image(
+                    curr_obs_img, pred_actions[:, t],
+                    R_C_pelvis, t_C_pelvis, fisheye_params,
+                    image_size, alpha=smpl_alpha,
+                    xsens_offsets=xsens_offsets,
+                    draw_skeleton=draw_skel,
+                )
+            else:
+                from planning.vis_utils import pose_to_image_coords_v2, draw_image_coords as draw_skel_fn
+                img_pil = Image.fromarray(
+                    (255.0 * curr_obs_img.permute(1, 2, 0)).to(torch.uint8).cpu().numpy()
+                )
+                draw = ImageDraw.Draw(img_pil)
+                image_coords = pose_to_image_coords_v2(
+                    pred_actions[:, t], R_C_pelvis, t_C_pelvis, fisheye_params,
+                    xsens_offsets, image_size=image_size
+                )  # (1, 15, 2)
+                draw_skel_fn(draw, image_coords)
             skel_tensors.append(T_transforms.ToTensor()(img_pil))
         return torch.stack(skel_tensors).to(device)  # (T, 3, H, W)
     else:
@@ -92,7 +108,12 @@ def save_mu_step_results(mu_rollout_state, state_0, state_g,
     image_size    = state_0["images"].shape[-1]
     top_seq = build_skeleton_top_seq(
         curr_obs_img, pred_deltas, first_pose, xsens_offsets,
-        fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T
+        fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T,
+        overlay='skin', smpl_alpha=0.9,
+    )
+    top_seq_noskin = build_skeleton_top_seq(
+        curr_obs_img, pred_deltas, first_pose, xsens_offsets,
+        fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T,
     )
 
     # top-left: curr_obs + predicted waypoints (waypoint CEM) or plain curr_obs (peva)
@@ -103,6 +124,14 @@ def save_mu_step_results(mu_rollout_state, state_0, state_g,
         curr_obs=curr_obs_img,
         goal_obs=goal_obs,
         top_seq=top_seq,
+        bot_seq=generated_obs[0],           # (T, 3, H, W)
+    )
+    save_action_obs_sequence_viz(
+        save_path=os.path.join(save_path, "action_obs_seq_noskin.png"),
+        goal_image=policy_input_goal,
+        curr_obs=curr_obs_img,
+        goal_obs=goal_obs,
+        top_seq=top_seq_noskin,
         bot_seq=generated_obs[0],           # (T, 3, H, W)
     )
 

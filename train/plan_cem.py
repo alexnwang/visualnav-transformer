@@ -263,6 +263,23 @@ def main(args):
         else:
             fisheye_params, R_C_pelvis, t_C_pelvis = None, None, None
 
+        if fisheye_params is not None:
+            from planning.wrappers import build_skeleton_top_seq
+            gt_skel_imgs_skin = build_skeleton_top_seq(
+                curr_image, deltas, first_pose, xsens_offsets[0],
+                fisheye_params, R_C_pelvis, t_C_pelvis,
+                curr_image.shape[-1], n_steps,
+                overlay='skin', smpl_alpha=0.9,
+            )
+            save_action_obs_sequence_viz(
+                save_path=f"{task_dir}/gt_action_obs_seq_skin.png",
+                goal_image=goal_image[0],
+                curr_obs=curr_image,
+                goal_obs=goal_obs[0],
+                top_seq=gt_skel_imgs_skin,
+                bot_seq=gt_frames[0],
+            )
+
         obs_0 = {"images": obs_images,
                  "goal_image": goal_image,
                  "context_poses": context_poses}
