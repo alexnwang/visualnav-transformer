@@ -21,44 +21,107 @@ SLURM_HEADER="#!/bin/bash
 # python plan_cem.py -a waypoint3d -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model 3d_mask --rank 0 --world_size 1 --num_samples_to_plan 100 --shuffle
 
 ########################################################
-# 03/29, lets run a long horizon waypoint planning
+# 04/08, peva and waypoint planning for distances 6 10 14 18
 ########################################################
-world_size=1
-for rank in $(seq 0 $((world_size - 1))); do
-sbatch --time=24:00:00 <<EOF
+for distance in 6 10 14 18; do
+sbatch --time=16:00:00 <<EOF
 ${SLURM_HEADER}
-#SBATCH --job-name=plan-waypoint_cem-heldout-o6-n8-H2-t4-v0.3-N64-ds250-rank${rank}
+#SBATCH --job-name=plan-waypoint_cem-o6-n8-H1-t4-v0.3-N64-ds64-dist${distance}
 cd /home/anw2067/visualnav-transformer/train
-python plan_cem.py -a waypoint -o 6 -H 2 -n 64 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 250 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat 16 --max_dist_cat 16
+python plan_cem.py -a waypoint -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
+EOF
+sbatch --time=16:00:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=plan-peva_cem-o6-n8-H${distance}-t2-v0.05-N64-ds64-dist${distance}
+cd /home/anw2067/visualnav-transformer/train
+python plan_cem.py -a peva -o 6 -H ${distance} -n 8 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
 EOF
 done
+
+########################################################
+# 04/01, opt_steps=0 initial baseline (dreamsim_init only, no CEM)
+########################################################
+# for distance in 8 12 16 20; do
+# sbatch --time=2:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-waypoint_cem-init-o0-N64-ds64-dist${distance}
+# cd /home/anw2067/visualnav-transformer/train
+# python plan_cem.py -a waypoint -o 0 -H 1 -n 1 -t 1 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
+# EOF
+# sbatch --time=2:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-peva_cem-init-o0-N64-ds64-dist${distance}
+# cd /home/anw2067/visualnav-transformer/train
+# python plan_cem.py -a peva -o 0 -H ${distance} -n 1 -t 1 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
+# EOF
+# done
+
+########################################################
+# 03/31, rerun some and add dist8 n16
+########################################################
+# for distance in 8; do
+# world_size=1
+# for rank in $(seq 0 $((world_size - 1))); do
+# sbatch --time=16:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-waypoint_cem-heldout-o6-n16-H1-t4-v0.3-N64-ds64-dist${distance}-rank${rank}
+# cd /home/anw2067/visualnav-transformer/train
+# python plan_cem.py -a waypoint -o 6 -H 1 -n 16 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
+# EOF
+# done
+# done
+
+# for distance in 20; do
+# world_size=1
+# for rank in $(seq 0 $((world_size - 1))); do
+# sbatch --time=24:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-peva_cem-heldout-o6-n8-H8-t2-v0.05-N64-ds64-dist${distance}-rank${rank}
+# cd /home/anw2067/visualnav-transformer/train
+# python plan_cem.py -a peva -o 6 -H ${distance} -n 8 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
+# EOF
+# done
+# done
+
+########################################################
+# 03/29, lets run a long horizon waypoint planning
+########################################################
+# world_size=1
+# for rank in $(seq 0 $((world_size - 1))); do
+# sbatch --time=24:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-waypoint_cem-heldout-o6-n8-H2-t4-v0.3-N64-ds250-rank${rank}
+# cd /home/anw2067/visualnav-transformer/train
+# python plan_cem.py -a waypoint -o 6 -H 2 -n 64 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 250 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat 16 --max_dist_cat 16
+# EOF
+# done
 
 ########################################################
 # 03/29, lets run a long horizon peva planning and a few more samples for waypoint to see if it improves.
 ########################################################
-for distance in 12 16 20; do
-world_size=1
-for rank in $(seq 0 $((world_size - 1))); do
-sbatch --time=16:00:00 <<EOF
-${SLURM_HEADER}
-#SBATCH --job-name=plan-peva_cem-heldout-o6-n8-H8-t2-v0.05-N64-ds64-dist${distance}-rank${rank}
-cd /home/anw2067/visualnav-transformer/train
-python plan_cem.py -a peva -o 6 -H ${distance} -n 8 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
-EOF
-done
-done
+# for distance in 12 16 20; do
+# world_size=1
+# for rank in $(seq 0 $((world_size - 1))); do
+# sbatch --time=16:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-peva_cem-heldout-o6-n8-H8-t2-v0.05-N64-ds64-dist${distance}-rank${rank}
+# cd /home/anw2067/visualnav-transformer/train
+# python plan_cem.py -a peva -o 6 -H ${distance} -n 8 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
+# EOF
+# done
+# done
 
-for distance in 12 16 20; do
-world_size=1
-for rank in $(seq 0 $((world_size - 1))); do
-sbatch --time=16:00:00 <<EOF
-${SLURM_HEADER}
-#SBATCH --job-name=plan-peva_cem-heldout-o6-n16-H8-t2-v0.05-N64-ds64-dist${distance}-rank${rank}
-cd /home/anw2067/visualnav-transformer/train
-python plan_cem.py -a peva -o 6 -H ${distance} -n 16 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
-EOF
-done
-done
+# for distance in 12 16 20; do
+# world_size=1
+# for rank in $(seq 0 $((world_size - 1))); do
+# sbatch --time=16:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-waypoint_cem-heldout-o6-n16-H1-t4-v0.3-N64-ds64-dist${distance}-rank${rank}
+# cd /home/anw2067/visualnav-transformer/train
+# python plan_cem.py -a waypoint -o 6 -H 1 -n 16 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 64 --shuffle --min_dist_cat ${distance} --max_dist_cat ${distance}
+# EOF
+# done
+# done
 
 
 ########################################################
