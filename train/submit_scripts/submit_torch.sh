@@ -26,5 +26,5 @@ sbatch <<EOF
 #SBATCH --account=torch_pr_230_tandon_advanced
 
 cd /home/anw2067/visualnav-transformer/train
-./torch_run.sh ${CONFIG_FILE} ${NUM_GPUS}
+singularity exec --nv --overlay /scratch/anw2067/nymeria.sqf:ro /share/apps/images/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif bash -l -c "conda activate nomad_train && ./torch_run.sh ${CONFIG_FILE} ${NUM_GPUS}"
 EOF
