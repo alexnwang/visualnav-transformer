@@ -265,22 +265,30 @@ def _get_smpl_model():
     return _smpl_model_singleton
 
 
+_renderer_render_count = 0
+_RENDERER_RESET_INTERVAL = 50  # reset every N renders to reclaim GPU memory
+
+
 def _reset_renderer():
-    global _renderer_singleton, _renderer_size
+    global _renderer_singleton, _renderer_size, _renderer_render_count
     if _renderer_singleton is not None:
         _renderer_singleton.delete()
     _renderer_singleton = None
     _renderer_size = None
+    _renderer_render_count = 0
 
 
 def _get_renderer(image_size):
-    global _renderer_singleton, _renderer_size
-    if _renderer_singleton is None or _renderer_size != image_size:
+    global _renderer_singleton, _renderer_size, _renderer_render_count
+    _renderer_render_count += 1
+    needs_reset = _renderer_render_count >= _RENDERER_RESET_INTERVAL
+    if _renderer_singleton is None or _renderer_size != image_size or needs_reset:
         import pyrender
         if _renderer_singleton is not None:
             _renderer_singleton.delete()
         _renderer_singleton = pyrender.OffscreenRenderer(image_size, image_size)
         _renderer_size = image_size
+        _renderer_render_count = 0
     return _renderer_singleton
 
 
