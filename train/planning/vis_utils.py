@@ -444,6 +444,7 @@ def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
             color_render, depth_render = renderer.render(scene)
         except OpenGL.error.GLError:
             logger.warning("OpenGL render failed twice, skipping SMPL overlay")
+            _reset_renderer()
             color_render = None
     
     # 11 — Alpha-composite rendered mesh onto observation image
