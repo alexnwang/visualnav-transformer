@@ -3,6 +3,7 @@ _os.environ.setdefault('PYOPENGL_PLATFORM', 'egl')
 _os.environ.setdefault('__EGL_VENDOR_LIBRARY_FILENAMES', '/usr/share/glvnd/egl_vendor.d/10_nvidia.json')
 
 import shutil
+import OpenGL.error
 from nymeria.download_utils import DownloadManager
 from nymeria.definitions import DataGroups
 from nymeria.data_provider import SequencePathProvider, NymeriaDataProvider
@@ -264,6 +265,14 @@ def _get_smpl_model():
     return _smpl_model_singleton
 
 
+def _reset_renderer():
+    global _renderer_singleton, _renderer_size
+    if _renderer_singleton is not None:
+        _renderer_singleton.delete()
+    _renderer_singleton = None
+    _renderer_size = None
+
+
 def _get_renderer(image_size):
     global _renderer_singleton, _renderer_size
     if _renderer_singleton is None or _renderer_size != image_size:
@@ -417,13 +426,25 @@ def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
     scene.add(light, pose=np.eye(4))
     
     renderer = _get_renderer(image_size)
-    color_render, depth_render = renderer.render(scene)
+    try:
+        color_render, depth_render = renderer.render(scene)
+    except OpenGL.error.GLError:
+        # GL_INVALID_FRAMEBUFFER_OPERATION — recreate the renderer and retry
+        _reset_renderer()
+        renderer = _get_renderer(image_size)
+        try:
+            color_render, depth_render = renderer.render(scene)
+        except OpenGL.error.GLError:
+            logger.warning("OpenGL render failed twice, skipping SMPL overlay")
+            color_render = None
     
     # 11 — Alpha-composite rendered mesh onto observation image
     obs_np = (
         curr_obs_img.permute(1, 2, 0).detach().cpu().numpy() * 255
     ).clip(0, 255).astype(np.uint8)
     obs_pil = Image.fromarray(obs_np)
+    if color_render is None:
+        return obs_pil
     render_pil = Image.fromarray(color_render)
     # Fade out mesh parts closer than min_depth; fully transparent below that
     min_depth = 0.01
