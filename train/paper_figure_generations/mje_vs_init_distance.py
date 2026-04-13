@@ -10,16 +10,24 @@ from pathlib import Path
 LOG_ROOT = "/home/anw2067/visualnav-transformer/train/logs/cem"
 
 RUNS = {
-    "waypoint_cem": {
+    "Lifted CEM": {
+        6:  f"{LOG_ROOT}/2026_04_09_12_38_59:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist6-6",
         8:  f"{LOG_ROOT}/2026_03_27_02_19_14:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist8-8",
+        10: f"{LOG_ROOT}/2026_04_08_17_06_27:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist10-10",
         12: f"{LOG_ROOT}/2026_03_27_02_19_14:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist12-12",
+        14: f"{LOG_ROOT}/2026_04_08_17_37_16:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist14-14",
         16: f"{LOG_ROOT}/2026_03_27_02_33_19:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist16-16",
+        18: f"{LOG_ROOT}/2026_04_08_22_34_55:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist18-18",
         20: f"{LOG_ROOT}/2026_03_27_02_35_26:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist20-20",
     },
-    "peva_cem": {
+    "PEVA CEM": {
+        6:  f"{LOG_ROOT}/2026_04_09_16_05_29:peva_cem-h6-n8-t2-v0.05-o6-N64-ds64-dist6-6",
         8:  f"{LOG_ROOT}/2026_03_28_00_29_25:peva_cem-h8-n8-t2-v0.05-o6-N64-ds64-dist8-8",
+        10: f"{LOG_ROOT}/2026_04_08_17_25_34:peva_cem-h10-n8-t2-v0.05-o6-N64-ds64-dist10-10",
         12: f"{LOG_ROOT}/2026_03_29_23_49_18:peva_cem-h12-n8-t2-v0.05-o6-N64-ds64-dist12-12",
+        14: f"{LOG_ROOT}/2026_04_08_22_31_56:peva_cem-h14-n8-t2-v0.05-o6-N64-ds64-dist14-14",
         16: f"{LOG_ROOT}/2026_03_30_10_19_22:peva_cem-h16-n8-t2-v0.05-o6-N64-ds64-dist16-16",
+        18: f"{LOG_ROOT}/2026_04_08_23_30_51:peva_cem-h18-n8-t2-v0.05-o6-N64-ds64-dist18-18",
         20: f"{LOG_ROOT}/2026_03_31_16_07_19:peva_cem-h20-n8-t2-v0.05-o6-N64-ds64-dist20-20",
     },
 }
@@ -66,15 +74,19 @@ def main():
 
     for label, dist_runs in RUNS.items():
         inits, finals = load_all_tasks(dist_runs, METRIC, cumulative_min=CUMULATIVE_MIN)
-        centers, means = [], []
+        centers, means, sems = [], [], []
         for i in range(num_buckets):
             lo, hi = bucket_edges[i], bucket_edges[i + 1]
             mask = (inits >= lo) & (inits < hi if i < num_buckets - 1 else inits <= hi)
             if mask.sum() == 0:
                 continue
             centers.append(0.5 * (lo + hi))
-            means.append(finals[mask].mean())
-        ax.plot(centers, means, marker="o", label=label, markersize=4)
+            bucket_vals = finals[mask]
+            means.append(bucket_vals.mean())
+            sems.append(bucket_vals.std() / np.sqrt(len(bucket_vals)))
+        centers, means, sems = np.array(centers), np.array(means), np.array(sems)
+        line, = ax.plot(centers, means, marker="o", label=label, markersize=4)
+        ax.fill_between(centers, means - sems, means + sems, color=line.get_color(), alpha=0.3)
 
     # Identity line: y = x (no improvement from planning)
     xlims = ax.get_xlim()
