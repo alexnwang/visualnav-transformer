@@ -75,7 +75,8 @@ def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
 
 
 def save_mu_step_results(mu_rollout_state, state_0, state_g,
-                         fisheye_params, R_C_pelvis, t_C_pelvis, save_path):
+                         fisheye_params, R_C_pelvis, t_C_pelvis, save_path,
+                         render_skin=True):
     """
     Save per-iteration mu evaluation artifacts:
       - action_obs_seq.png: 2-row visualization
@@ -106,11 +107,13 @@ def save_mu_step_results(mu_rollout_state, state_0, state_g,
     first_pose    = state_g["first_pose"]        # (1, 1, 48)
     xsens_offsets = state_g["xsens_offsets"][0]  # (15, 3)
     image_size    = state_0["images"].shape[-1]
-    top_seq = build_skeleton_top_seq(
-        curr_obs_img, pred_deltas, first_pose, xsens_offsets,
-        fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T,
-        overlay='skin', smpl_alpha=0.9,
-    )
+
+    if render_skin:
+        top_seq = build_skeleton_top_seq(
+            curr_obs_img, pred_deltas, first_pose, xsens_offsets,
+            fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T,
+            overlay='skin', smpl_alpha=0.9,
+        )
     top_seq_noskin = build_skeleton_top_seq(
         curr_obs_img, pred_deltas, first_pose, xsens_offsets,
         fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T,
@@ -118,14 +121,15 @@ def save_mu_step_results(mu_rollout_state, state_0, state_g,
 
     # top-left: curr_obs + predicted waypoints (waypoint CEM) or plain curr_obs (peva)
     policy_input_goal = goal_images[0, 0] if goal_images is not None else curr_obs_img
-    save_action_obs_sequence_viz(
-        save_path=os.path.join(save_path, "action_obs_seq.png"),
-        goal_image=policy_input_goal,
-        curr_obs=curr_obs_img,
-        goal_obs=goal_obs,
-        top_seq=top_seq,
-        bot_seq=generated_obs[0],           # (T, 3, H, W)
-    )
+    if render_skin:
+        save_action_obs_sequence_viz(
+            save_path=os.path.join(save_path, "action_obs_seq.png"),
+            goal_image=policy_input_goal,
+            curr_obs=curr_obs_img,
+            goal_obs=goal_obs,
+            top_seq=top_seq,
+            bot_seq=generated_obs[0],           # (T, 3, H, W)
+        )
     save_action_obs_sequence_viz(
         save_path=os.path.join(save_path, "action_obs_seq_noskin.png"),
         goal_image=policy_input_goal,
@@ -417,12 +421,14 @@ class EvaluatorPeva(PevaWM):
         return metrics, {}
 
     def eval_mu_step(self, cem_step, mu, mu_rollout_state, state_0, state_g,
-                     fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None, save_path=None):
+                     fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None, save_path=None,
+                     render_skin=True):
         """Evaluate mu after a CEM iteration: compute metrics and save artifacts."""
         metrics, other_vals = self.eval_actions(cem_step, mu, state_0, state_g)
         if save_path is not None:
             save_mu_step_results(mu_rollout_state, state_0, state_g,
-                                 fisheye_params, R_C_pelvis, t_C_pelvis, save_path)
+                                 fisheye_params, R_C_pelvis, t_C_pelvis, save_path,
+                                 render_skin=render_skin)
         return metrics, other_vals
 
 
@@ -579,10 +585,12 @@ class EvaluatorWaypoint(WaypointWM):
         return metrics, other_vals
 
     def eval_mu_step(self, cem_step, mu, mu_rollout_state, state_0, state_g,
-                     fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None, save_path=None):
+                     fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None, save_path=None,
+                     render_skin=True):
         """Evaluate mu after a CEM iteration: compute metrics and save artifacts."""
         metrics, other_vals = self.eval_actions(cem_step, mu, state_0, state_g)
         if save_path is not None:
             save_mu_step_results(mu_rollout_state, state_0, state_g,
-                                 fisheye_params, R_C_pelvis, t_C_pelvis, save_path)
+                                 fisheye_params, R_C_pelvis, t_C_pelvis, save_path,
+                                 render_skin=render_skin)
         return metrics, other_vals

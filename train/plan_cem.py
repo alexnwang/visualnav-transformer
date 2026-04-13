@@ -263,7 +263,7 @@ def main(args):
         else:
             fisheye_params, R_C_pelvis, t_C_pelvis = None, None, None
 
-        if fisheye_params is not None:
+        if fisheye_params is not None and not args.no_skin:
             from planning.wrappers import build_skeleton_top_seq
             gt_skel_imgs_skin = build_skeleton_top_seq(
                 curr_image, deltas, first_pose, xsens_offsets[0],
@@ -290,7 +290,8 @@ def main(args):
                  "goal_image_coords": goal_image_coords}
 
         cem_planner.plan(obs_0, obs_g, track_idx_name, actions=action_init,
-                         fisheye_params=fisheye_params, R_C_pelvis=R_C_pelvis, t_C_pelvis=t_C_pelvis)
+                         fisheye_params=fisheye_params, R_C_pelvis=R_C_pelvis, t_C_pelvis=t_C_pelvis,
+                         render_skin=not args.no_skin)
         count += 1
         if args.num_samples_to_plan > 0 and count > args.num_samples_to_plan: break
         
@@ -343,6 +344,7 @@ if __name__ == "__main__":
     parser.add_argument("--min_dist_threshold", type=float, default=0.1, help="Minimum distance threshold")
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")
     parser.add_argument("--no_wandb", action="store_true", help="Don't use wandb")
+    parser.add_argument("--no_skin", action="store_true", help="Skip skinned mesh renders (faster)")
     parser.add_argument("--test", action="store_true", help="Test run")
     parser.add_argument("--camera_data_folder", type=str,
                         default="/home/anw2067/scratch/nymeria_visibility_matrix",

@@ -152,7 +152,7 @@ class CEMPlanner(BasePlanner):
                 combined_metrics[key] = metrics_dict.get(key, 0.0)
         return combined_metrics
 
-    def plan(self, obs_0, obs_g, task_name, actions=None, fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None):
+    def plan(self, obs_0, obs_g, task_name, actions=None, fisheye_params=None, R_C_pelvis=None, t_C_pelvis=None, render_skin=True):
         """
         Args:
             actions: normalized
@@ -222,7 +222,6 @@ class CEMPlanner(BasePlanner):
             sigma = topk_action.std(dim=0, keepdim=True)
             mu_history.append(mu.cpu().clone())
             sigma_history.append(sigma.cpu().clone())
-
             for k, v in {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}.items():
                 self.accum_objective_metric_dicts[task_name][k].append(v)
             log_dict = {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}
@@ -239,7 +238,7 @@ class CEMPlanner(BasePlanner):
                 metrics, other_vals = self.evaluator.eval_mu_step(
                     i, mu, mu_state, trans_obs_0, z_obs_g,
                     fisheye_params=fisheye_params, R_C_pelvis=R_C_pelvis, t_C_pelvis=t_C_pelvis,
-                    save_path=step_dir,
+                    save_path=step_dir, render_skin=render_skin,
                 )
                 metrics["dreamsim"] = mu_dreamsim
                 for k, v in metrics.items():
@@ -296,8 +295,8 @@ class CEMPlanner(BasePlanner):
             "eval_other_vals": dict(self.accum_eval_other_vals[current_task_name]),
             "objective_metrics": dict(self.accum_objective_metric_dicts[current_task_name]),
             "task_metrics": self.accum_task_dicts.get(current_task_name, {}),
-            "mu_history": torch.stack(mu_history),
-            "sigma_history": torch.stack(sigma_history),
+            "mu_history": torch.stack(mu_history) if mu_history else None,
+            "sigma_history": torch.stack(sigma_history) if sigma_history else None,
         }, f"{self.log_dir}/{current_task_name}/results.pth")
 
         return mu

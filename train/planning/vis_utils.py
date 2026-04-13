@@ -294,7 +294,8 @@ def _get_renderer(image_size):
 
 def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
                          fisheye_params, image_size, alpha=0.7,
-                         xsens_offsets=None, draw_skeleton=False):
+                         xsens_offsets=None, draw_skeleton=False,
+                         mesh_color=(0.4, 0.6, 0.8)):
     """
     Render a skinned SMPL body mesh composited onto curr_obs_img.
 
@@ -424,20 +425,29 @@ def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
     mesh_trimesh = trimesh.Trimesh(
         vertices=verts_gl.astype(np.float64), faces=faces, process=False
     )
-    mesh_r = pyrender.Mesh.from_trimesh(mesh_trimesh, smooth=True)
-    
+    obs_np = (
+        curr_obs_img.permute(1, 2, 0).detach().cpu().numpy() * 255
+    ).clip(0, 255).astype(np.uint8)
+    obs_pil = Image.fromarray(obs_np)
+
+    material = pyrender.MetallicRoughnessMaterial(
+        baseColorFactor=(*mesh_color, 1.0),
+        metallicFactor=0.2,
+        roughnessFactor=0.6,
+    )
+    mesh_r = pyrender.Mesh.from_trimesh(mesh_trimesh, material=material, smooth=True)
+
     scene = pyrender.Scene(ambient_light=[0.4, 0.4, 0.4])
     scene.add(mesh_r)
     cam = pyrender.IntrinsicsCamera(fx=fx, fy=fy, cx=cx, cy=cy, znear=0.01, zfar=100.0)
     scene.add(cam, pose=np.eye(4))
     light = pyrender.DirectionalLight(color=[1., 1., 1.], intensity=4.0)
     scene.add(light, pose=np.eye(4))
-    
+
     renderer = _get_renderer(image_size)
     try:
         color_render, depth_render = renderer.render(scene)
     except OpenGL.error.GLError:
-        # GL_INVALID_FRAMEBUFFER_OPERATION — recreate the renderer and retry
         _reset_renderer()
         renderer = _get_renderer(image_size)
         try:
@@ -446,25 +456,18 @@ def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
             logger.warning("OpenGL render failed twice, skipping SMPL overlay")
             _reset_renderer()
             color_render = None
-    
-    # 11 — Alpha-composite rendered mesh onto observation image
-    obs_np = (
-        curr_obs_img.permute(1, 2, 0).detach().cpu().numpy() * 255
-    ).clip(0, 255).astype(np.uint8)
-    obs_pil = Image.fromarray(obs_np)
-    if color_render is None:
-        return obs_pil
-    render_pil = Image.fromarray(color_render)
-    # Fade out mesh parts closer than min_depth; fully transparent below that
-    min_depth = 0.01
-    fade_range = 0.03  # linear ramp from 0 to full alpha over this range
-    alpha_map = np.zeros_like(depth_render)
-    visible = depth_render > 0
-    alpha_map[visible] = np.clip(
-        (depth_render[visible] - min_depth) / fade_range, 0.0, 1.0
-    ) * alpha
-    mask = (alpha_map * 255).astype(np.uint8)
-    obs_pil.paste(render_pil, mask=Image.fromarray(mask, mode='L'))
+
+    if color_render is not None:
+        render_pil = Image.fromarray(color_render)
+        min_depth = 0.01
+        fade_range = 0.03
+        alpha_map = np.zeros_like(depth_render)
+        visible = depth_render > 0
+        alpha_map[visible] = np.clip(
+            (depth_render[visible] - min_depth) / fade_range, 0.0, 1.0
+        ) * alpha
+        mask = (alpha_map * 255).astype(np.uint8)
+        obs_pil.paste(render_pil, mask=Image.fromarray(mask, mode='L'))
 
     # Draw FK skeleton on top of the rendered mesh
     if draw_skeleton and xsens_offsets is not None:
