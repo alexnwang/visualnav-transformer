@@ -112,7 +112,7 @@ def save_mu_step_results(mu_rollout_state, state_0, state_g,
         top_seq = build_skeleton_top_seq(
             curr_obs_img, pred_deltas, first_pose, xsens_offsets,
             fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T,
-            overlay='skin', smpl_alpha=0.9,
+            overlay='both', smpl_alpha=0.9,
         )
     top_seq_noskin = build_skeleton_top_seq(
         curr_obs_img, pred_deltas, first_pose, xsens_offsets,

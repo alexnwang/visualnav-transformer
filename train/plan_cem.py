@@ -269,7 +269,7 @@ def main(args):
                 curr_image, deltas, first_pose, xsens_offsets[0],
                 fisheye_params, R_C_pelvis, t_C_pelvis,
                 curr_image.shape[-1], n_steps,
-                overlay='skin', smpl_alpha=0.9,
+                overlay='both', smpl_alpha=0.9,
             )
             save_action_obs_sequence_viz(
                 save_path=f"{task_dir}/gt_action_obs_seq_skin.png",
