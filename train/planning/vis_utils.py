@@ -447,12 +447,20 @@ def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
     renderer = _get_renderer(image_size)
     try:
         color_render, depth_render = renderer.render(scene)
-    except OpenGL.error.GLError:
+    except (OpenGL.error.GLError, ValueError):
         _reset_renderer()
         renderer = _get_renderer(image_size)
+        # Rebuild everything — old objects are bound to the deleted GL context
+        mesh_r = pyrender.Mesh.from_trimesh(mesh_trimesh, material=material, smooth=True)
+        cam = pyrender.IntrinsicsCamera(fx=fx, fy=fy, cx=cx, cy=cy, znear=0.01, zfar=100.0)
+        light = pyrender.DirectionalLight(color=[1., 1., 1.], intensity=4.0)
+        scene = pyrender.Scene(ambient_light=[0.4, 0.4, 0.4])
+        scene.add(mesh_r)
+        scene.add(cam, pose=np.eye(4))
+        scene.add(light, pose=np.eye(4))
         try:
             color_render, depth_render = renderer.render(scene)
-        except OpenGL.error.GLError:
+        except (OpenGL.error.GLError, ValueError):
             logger.warning("OpenGL render failed twice, skipping SMPL overlay")
             _reset_renderer()
             color_render = None
