@@ -543,12 +543,19 @@ class EvaluatorWaypoint(WaypointWM):
             "dreamsim_init": mu_loss[0].item(),
         }
 
+        N = max(self.num_eval_samples, 1)
+        rep_context_poses = context_poses[:, None].repeat(1, N, 1, 1).flatten(0, 1) if N > 1 else context_poses
+        rep_curr_obs = curr_obs[:, None].repeat(1, N, 1, 1, 1, 1).flatten(0, 1) if N > 1 else curr_obs
+        rep_goal_obs = goal_obs[:, None].repeat(1, N, 1, 1, 1).flatten(0, 1) if N > 1 else goal_obs
+        rep_first_pose = first_pose[:, None].repeat(1, N, 1, 1).flatten(0, 1) if N > 1 else first_pose
+        rep_gt_actions = gt_actions[:, None].repeat(1, N, 1, 1).flatten(0, 1) if N > 1 else gt_actions
+
         if self.waypoint_mode == "waypoint_point3d":
             # gt 3D waypoints not yet available; nowp uses all-(-1) goal_coordinates
-            no_waypoints = torch.ones(B, 1, 12, device=device) * -1
-            no_waypoint_deltas = self.sample_fn(waypoints=no_waypoints, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1, 2)
-            no_waypoint_actions = get_action_smpl_torch(first_pose, no_waypoint_deltas, XSensConstants.upper_body_num_parts)
-            no_waypoint_xyz_dist_matrix, _, leaf_xyz_no_waypoints, _ = _compute_part_distance_matrices(no_waypoint_actions[:, -1], gt_actions[:, -1], skel)
+            no_waypoints = torch.ones(B * N, 1, 12, device=device) * -1
+            no_waypoint_deltas = self.sample_fn(waypoints=no_waypoints, context_poses=rep_context_poses, curr_obs=rep_curr_obs, goal_obs=rep_goal_obs, device=device)[1].flatten(1, 2)
+            no_waypoint_actions = get_action_smpl_torch(rep_first_pose, no_waypoint_deltas, XSensConstants.upper_body_num_parts)
+            no_waypoint_xyz_dist_matrix, _, leaf_xyz_no_waypoints, _ = _compute_part_distance_matrices(no_waypoint_actions[:, -1], rep_gt_actions[:, -1], skel)
             no_intermediate_xyz = no_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
             no_all_xyz = no_waypoint_xyz_dist_matrix.mean(dim=-1)
             nowp_metrics = {
@@ -563,15 +570,21 @@ class EvaluatorWaypoint(WaypointWM):
         else:
             gt_waypoints = goal_image_coords[:, :XSensConstants.upper_body_num_parts][:, leaf_indexer].flatten(1, 2)[:, None]
 
-            gt_waypoint_deltas = self.sample_fn(waypoints=gt_waypoints, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1, 2)
-            gt_waypoint_actions = get_action_smpl_torch(first_pose, gt_waypoint_deltas, XSensConstants.upper_body_num_parts)
-            gt_waypoint_xyz_dist_matrix, _, leaf_xyz_gt_waypoints, _ = _compute_part_distance_matrices(gt_waypoint_actions[:, -1], gt_actions[:, -1], skel)
+            gtwp_waypoints = gt_waypoints
+            if N > 1:
+                gtwp_waypoints = gtwp_waypoints[:, None].repeat(1, N, 1, 1).flatten(0, 1)
+            gt_waypoint_deltas = self.sample_fn(waypoints=gtwp_waypoints, context_poses=rep_context_poses, curr_obs=rep_curr_obs, goal_obs=rep_goal_obs, device=device)[1].flatten(1, 2)
+            gt_waypoint_actions = get_action_smpl_torch(rep_first_pose, gt_waypoint_deltas, XSensConstants.upper_body_num_parts)
+            gt_waypoint_xyz_dist_matrix, _, leaf_xyz_gt_waypoints, _ = _compute_part_distance_matrices(gt_waypoint_actions[:, -1], rep_gt_actions[:, -1], skel)
             gt_intermediate_xyz = gt_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
             gt_all_xyz = gt_waypoint_xyz_dist_matrix.mean(dim=-1)
 
-            no_waypoint_deltas = self.sample_fn(waypoints=torch.ones_like(gt_waypoints) * -1, context_poses=context_poses, curr_obs=curr_obs, goal_obs=goal_obs, device=device)[1].flatten(1, 2)
-            no_waypoint_actions = get_action_smpl_torch(first_pose, no_waypoint_deltas, XSensConstants.upper_body_num_parts)
-            no_waypoint_xyz_dist_matrix, _, leaf_xyz_no_waypoints, _ = _compute_part_distance_matrices(no_waypoint_actions[:, -1], gt_actions[:, -1], skel)
+            nowp_waypoints = torch.ones_like(gt_waypoints) * -1
+            if N > 1:
+                nowp_waypoints = nowp_waypoints[:, None].repeat(1, N, 1, 1).flatten(0, 1)
+            no_waypoint_deltas = self.sample_fn(waypoints=nowp_waypoints, context_poses=rep_context_poses, curr_obs=rep_curr_obs, goal_obs=rep_goal_obs, device=device)[1].flatten(1, 2)
+            no_waypoint_actions = get_action_smpl_torch(rep_first_pose, no_waypoint_deltas, XSensConstants.upper_body_num_parts)
+            no_waypoint_xyz_dist_matrix, _, leaf_xyz_no_waypoints, _ = _compute_part_distance_matrices(no_waypoint_actions[:, -1], rep_gt_actions[:, -1], skel)
             no_intermediate_xyz = no_waypoint_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
             no_all_xyz = no_waypoint_xyz_dist_matrix.mean(dim=-1)
 
