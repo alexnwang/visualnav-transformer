@@ -25,6 +25,31 @@ SLURM_HEADER="#!/bin/bash
 # singularity exec --nv --overlay /scratch/anw2067/nymeria.sqf:ro /share/apps/images/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif bash -l -c "conda activate nomad_train2 && python plan_cem_viz.py -a waypoint -n 128 -o 16 -t 8 -v 0.5 -R 32 -H 1 --peva_diffusion_steps 250 --nomad_model draw_mask --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
 
 ########################################################
+# 04/17, finish peva n16 dist8 (resume last 23 tasks: partial idx 105 + 22 remaining)
+########################################################
+
+sbatch --time=8:00:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=plan-peva_cem-o6-n16-H8-t2-v0.05-N64-ds64-dist8-resume23
+cd /home/anw2067/visualnav-transformer/train
+${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a peva -o 6 -H 8 -n 16 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 128 --skip_tasks 105 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+EOF
+
+########################################################
+# 04/17, plan_cem_viz ws=2 waypoint draw_mask dist8
+########################################################
+
+# world_size=2
+# for rank in $(seq 0 $((world_size - 1))); do
+# sbatch --time=12:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=cem_viz-ws${world_size}-n8-o12-R128-rank${rank}
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python plan_cem_viz.py -a waypoint -n 8 -o 12 -t 8 -v 0.5 -R 128 -H 1 -N 64 --peva_diffusion_steps 64 --peva_vis_diffusion_steps 250 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 32 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+# EOF
+# done
+
+########################################################
 # 04/16, plan_policy_only draw_mask 200 tasks dist8
 ########################################################
 
@@ -72,7 +97,7 @@ SLURM_HEADER="#!/bin/bash
 # cd /home/anw2067/visualnav-transformer/train
 # ${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a waypoint_point3d -o 6 -H 1 -n 16 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model 3d_mask --rank 0 --world_size 1 --num_samples_to_plan 128 --shuffle --min_dist_cat 8 --max_dist_cat 8"
 # EOF
-# sbatch --time=24:00:00 <<EOF
+# sbatch --time=28:00:00 <<EOF
 # ${SLURM_HEADER}
 # #SBATCH --job-name=plan-peva_cem-o6-n16-H8-t2-v0.05-N64-ds64-dist8
 # cd /home/anw2067/visualnav-transformer/train
@@ -105,15 +130,15 @@ SLURM_HEADER="#!/bin/bash
 # 04/15, cherry-pick best CEM viz, 6 workers x 32 tasks
 ########################################################
 
-world_size=6
-for rank in $(seq 0 $((world_size - 1))); do
-sbatch --time=12:00:00 <<EOF
-${SLURM_HEADER}
-#SBATCH --job-name=cem_viz-n8-o16-R128-rank${rank}
-cd /home/anw2067/visualnav-transformer/train
-${SING} bash -l -c "conda activate nomad_train2 && python plan_cem_viz.py -a waypoint -n 8 -o 12 -t 8 -v 0.5 -R 128 -H 1 -N 64 --peva_diffusion_steps 64 --peva_vis_diffusion_steps 250 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 32 --shuffle --min_dist_cat 8 --max_dist_cat 8"
-EOF
-done
+# world_size=6
+# for rank in $(seq 0 $((world_size - 1))); do
+# sbatch --time=12:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=cem_viz-n8-o16-R128-rank${rank}
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python plan_cem_viz.py -a waypoint -n 8 -o 12 -t 8 -v 0.5 -R 128 -H 1 -N 64 --peva_diffusion_steps 64 --peva_vis_diffusion_steps 250 --nomad_model draw_mask --rank ${rank} --world_size ${world_size} --num_samples_to_plan 32 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+# EOF
+# done
 
 ########################################################
 # 04/13, n8 dist8 200 tasks (ws=2, 100 per rank), waypoint + peva
