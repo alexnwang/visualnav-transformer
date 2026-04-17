@@ -34,8 +34,8 @@ RUNS = {
 }
 
 METRIC = "all_xyz"
-CUMULATIVE_MIN = True  # If True, take best value across all CEM steps per task
-OUTPUT_PATH = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/graphs/mje_vs_horizon.pdf"
+CUMULATIVE_MIN = False  # If True, take best value across all CEM steps per task
+OUTPUT_PATH = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/graphs/mje_vs_horizon.pdf" if CUMULATIVE_MIN else "/home/anw2067/visualnav-transformer/train/logs/paper_vis/graphs/mje_vs_horizon_nocummin.pdf"
 
 # ============================================================
 

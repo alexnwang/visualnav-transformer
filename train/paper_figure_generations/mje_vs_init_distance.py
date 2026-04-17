@@ -33,11 +33,11 @@ RUNS = {
 }
 
 METRIC = "all_xyz"
-CUMULATIVE_MIN = True
+CUMULATIVE_MIN = False
 BUCKET_MODE = "quantile"  # "fixed" for evenly spaced, "quantile" for equal-count bins
 BUCKET_WIDTH = 0.5  # meters (used when BUCKET_MODE == "fixed")
 NUM_BUCKETS = 20     # (used when BUCKET_MODE == "quantile")
-OUTPUT_PATH = "train/logs/paper_vis/graphs/mje_vs_init_distance.pdf"
+OUTPUT_PATH = "train/logs/paper_vis/graphs/mje_vs_init_distance.pdf" if CUMULATIVE_MIN else "train/logs/paper_vis/graphs/mje_vs_init_distance_nocummin.pdf"
 
 # ============================================================
 
