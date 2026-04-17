@@ -10,8 +10,8 @@ from PIL import Image, ImageDraw
 from planning.plotting_fns import save_action_obs_sequence_viz
 from vint_train.data.misc import XSensConstants, XsensSkeleton
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch
-from planning.utils import _compute_pose_and_loss, _compute_part_distance_matrices
-from planning.sampling import peva_sample, waypoint_sample
+from planning.utils import _compute_pose_and_loss, _compute_part_distance_matrices, draw_waypoints
+from planning.sampling import peva_sample, policy_sample, waypoint_sample
 
 def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
                            fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T,
@@ -272,6 +272,65 @@ class WaypointWM(WMWrapper):
         return {"generated_obs": generated_frames.to(torch.float32).flatten(1,2),
                 "deltas": policy_sampled_deltas.to(torch.float32).flatten(1,2),
                 "goal_images": waypoint_annotated_goals.to(torch.float32)}
+
+    def policy_only_rollout(self, state_0, act):
+        """Run only the policy (no PEVA), returning deltas and goal images.
+
+        For W>1, poses are propagated but images are not updated between steps
+        (since PEVA is skipped).
+        """
+        imagenet_norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        device = act.device
+        curr_obs = state_0['images']  # B, ctx, 3, H, W
+        context_poses = state_0['context_poses']  # B, ctx, 48
+        waypoints = self._scale_waypoints(act)
+
+        B, W = waypoints.shape[:2]
+        delta_accum = torch.zeros(B, W, self.policy_pred_horizon, self.policy_action_dim, device=device)
+        goal_obs_accum = torch.zeros(B, W, 3, self.image_size, self.image_size, device=device)
+
+        curr_poses = context_poses.clone()
+        for w in range(W):
+            policy_obs = imagenet_norm(curr_obs[:, -self.policy_context_size:].flatten(0, 1)).unflatten(0, (B, self.policy_context_size))
+            if self.waypoint_mode == "waypoint_point3d":
+                xy_waypoints = waypoints[:, w].reshape(-1, 4, 3)[:, :, :2]
+                goal_obs_accum[:, w] = draw_waypoints(curr_obs[:, -1], xy_waypoints)
+                goal_img = imagenet_norm(curr_obs[:, -1])
+                goal_coords = waypoints[:, w]
+            else:
+                goal_obs_accum[:, w] = draw_waypoints(curr_obs[:, -1], waypoints[:, w])
+                goal_img = imagenet_norm(goal_obs_accum[:, w])
+                goal_coords = None
+
+            deltas = policy_sample(self.policy_model, self.policy_diffusion,
+                        policy_obs, goal_img,
+                        curr_poses[:, -self.policy_context_size:],
+                        self.policy_pred_horizon, self.policy_action_dim, device,
+                        goal_coordinates=goal_coords)
+            delta_accum[:, w] = deltas
+
+            new_poses = get_action_smpl_torch(curr_poses[:, -1:], deltas, XSensConstants.upper_body_num_parts)
+            new_poses[:, :, :6] = torch.zeros_like(new_poses[:, :, :6])
+            curr_poses = torch.cat([curr_poses[:, new_poses.shape[1]:], new_poses], dim=1)
+
+        return {"deltas": delta_accum.to(torch.float32).flatten(1,2),
+                "goal_images": goal_obs_accum.to(torch.float32)}
+
+    def wm_only_rollout(self, state_0, precomputed_deltas, goal_images=None):
+        """Run only PEVA world model using pre-computed deltas from the policy."""
+        device = precomputed_deltas.device
+        curr_obs = state_0['images']
+
+        generated_frames, deltas = peva_sample(
+            self.peva_model, self.peva_diffusion, self.peva_vae, self.peva_stats,
+            curr_obs, precomputed_deltas,
+            self.peva_context_size, self.latent_size,
+            self.image_size, device)
+
+        return {"generated_obs": generated_frames.to(torch.float32),
+                "deltas": deltas.to(torch.float32),
+                "goal_images": goal_images}
 
 class ObjectiveDreamSIM:
     def __init__(self, pred_horizon, device,
