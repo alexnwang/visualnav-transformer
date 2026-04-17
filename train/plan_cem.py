@@ -190,7 +190,11 @@ def main(args):
     dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=0)
 
     count = 0
+    skipped = 0
     for idx, batch in enumerate(dataloader):
+        if skipped < args.skip_tasks:
+            skipped += 1
+            continue
         obs_images = batch["obs_images"]               # 1, context_size+1, 3, H, W
         goal_image = batch["goal_image"]               # 1, 3, H, W
         context_poses = batch["context_poses"]         # 1, context_size+1, 48
@@ -293,7 +297,7 @@ def main(args):
                          fisheye_params=fisheye_params, R_C_pelvis=R_C_pelvis, t_C_pelvis=t_C_pelvis,
                          render_skin=not args.no_skin)
         count += 1
-        if args.num_samples_to_plan > 0 and count > args.num_samples_to_plan: break
+        if args.num_samples_to_plan > 0 and count >= args.num_samples_to_plan: break
         
         
 MODEL_DIRECTORY={
@@ -343,6 +347,7 @@ if __name__ == "__main__":
     parser.add_argument("--curr_time_stride", type=int, default=1, help="Stride when iterating start times during split building")
     parser.add_argument("--min_dist_threshold", type=float, default=0.1, help="Minimum distance threshold")
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")
+    parser.add_argument("--skip_tasks", type=int, default=0, help="Skip the first N tasks before planning")
     parser.add_argument("--no_wandb", action="store_true", help="Don't use wandb")
     parser.add_argument("--no_skin", action="store_true", help="Skip skinned mesh renders (faster)")
     parser.add_argument("--test", action="store_true", help="Test run")
