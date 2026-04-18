@@ -25,15 +25,26 @@ SLURM_HEADER="#!/bin/bash
 # singularity exec --nv --overlay /scratch/anw2067/nymeria.sqf:ro /share/apps/images/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif bash -l -c "conda activate nomad_train2 && python plan_cem_viz.py -a waypoint -n 128 -o 16 -t 8 -v 0.5 -R 32 -H 1 --peva_diffusion_steps 250 --nomad_model draw_mask --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
 
 ########################################################
-# 04/17, finish peva n16 dist8 (resume last 23 tasks: partial idx 105 + 22 remaining)
+# 04/17, gt_waypoint_policy_rollouts with PEVA WM rollout, draw_mask dist8
 ########################################################
 
 sbatch --time=8:00:00 <<EOF
 ${SLURM_HEADER}
-#SBATCH --job-name=plan-peva_cem-o6-n16-H8-t2-v0.05-N64-ds64-dist8-resume23
+#SBATCH --job-name=gt_wp_policy_rollouts-draw_mask-N64-ds32-dist8-peva
 cd /home/anw2067/visualnav-transformer/train
-${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a peva -o 6 -H 8 -n 16 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 128 --skip_tasks 105 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+${SING} bash -l -c "conda activate nomad_train2 && python paper_figure_generations/gt_waypoint_policy_rollouts.py --nomad_model draw_mask -N 64 --peva_context_size 7 --num_samples_to_plan 32 --shuffle --min_dist_cat 8 --max_dist_cat 8 --use_peva"
 EOF
+
+########################################################
+# 04/17, finish peva n16 dist8 (resume last 23 tasks: partial idx 105 + 22 remaining)
+########################################################
+
+# sbatch --time=8:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-peva_cem-o6-n16-H8-t2-v0.05-N64-ds64-dist8-resume23
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a peva -o 6 -H 8 -n 16 -t 2 -v 0.05 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 128 --skip_tasks 105 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+# EOF
 
 ########################################################
 # 04/17, plan_cem_viz ws=2 waypoint draw_mask dist8
