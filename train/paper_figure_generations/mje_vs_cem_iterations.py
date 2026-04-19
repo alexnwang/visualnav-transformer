@@ -15,30 +15,36 @@ MARKERS = {8: "o", 16: "s", 64: "D"}
 
 RUNS = {
     # n=8
-    ("Lifted CEM(3D)", 8): f"{LOG_ROOT}/2026_03_27_17_19_17:waypoint_point3d_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist8-8",
-    ("Lifted CEM", 8): f"{LOG_ROOT}/2026_03_27_17_14_39:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist8-8",
-    ("PEVA CEM", 8): f"{LOG_ROOT}/2026_03_28_00_29_25:peva_cem-h8-n8-t2-v0.05-o6-N64-ds64-dist8-8",
+    ("Lifted CEM(3D)", 8): f"{LOG_ROOT}/2026_04_15_19_35_50:waypoint_point3d_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist8-8",
+    ("Lifted CEM", 8): f"{LOG_ROOT}/2026_04_15_19_35_26:waypoint_cem-h1-n8-t4-v0.3-o6-N64-ds64-dist8-8",
+    ("PEVA CEM", 8): f"{LOG_ROOT}/2026_04_15_19_36_50:peva_cem-h8-n8-t2-v0.05-o6-N64-ds64-dist8-8",
     # n=16
-    ("Lifted CEM(3D)", 16): f"{LOG_ROOT}/2026_04_14_07_23_53:waypoint_point3d_cem-h1-n16-t4-v0.3-o6-N64-ds64-dist8-8",
-    ("Lifted CEM", 16): f"{LOG_ROOT}/2026_04_14_07_23_53:waypoint_cem-h1-n16-t4-v0.3-o6-N64-ds64-dist8-8",
-    ("PEVA CEM", 16): f"{LOG_ROOT}/2026_04_13_12_49_39:peva_cem-h8-n16-t2-v0.05-o6-N64-ds64-dist8-8",
-    # n=64 (two ranks each, combined)
+    ("Lifted CEM(3D)", 16): f"{LOG_ROOT}/2026_04_15_20_15_01:waypoint_point3d_cem-h1-n16-t4-v0.3-o6-N64-ds64-dist8-8",
+    ("Lifted CEM", 16): f"{LOG_ROOT}/2026_04_15_20_08_54:waypoint_cem-h1-n16-t4-v0.3-o6-N64-ds64-dist8-8",
+    ("PEVA CEM", 16): f"{LOG_ROOT}/2026_04_18_10_49_07:COMBINED-peva_cem-h8-n16-t2-v0.05-o6-N64-ds64-dist8-8",
+    # n=64 (four ranks each, combined)
     ("Lifted CEM(3D)", 64): [
-        f"{LOG_ROOT}/2026_04_14_07_25_13:waypoint_point3d_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-0:2",
-        f"{LOG_ROOT}/2026_04_14_07_35_00:waypoint_point3d_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-1:2",
+        f"{LOG_ROOT}/2026_04_15_20_54_34:waypoint_point3d_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-0:4",
+        f"{LOG_ROOT}/2026_04_15_21_14_10:waypoint_point3d_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-1:4",
+        f"{LOG_ROOT}/2026_04_16_19_17_27:waypoint_point3d_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-2:4",
+        f"{LOG_ROOT}/2026_04_17_12_09_59:waypoint_point3d_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-3:4",
     ],
     ("Lifted CEM", 64): [
-        f"{LOG_ROOT}/2026_04_13_12_51_51:waypoint_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-0:2",
-        f"{LOG_ROOT}/2026_04_13_12_53_43:waypoint_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-1:2",
+        f"{LOG_ROOT}/2026_04_15_20_18_33:waypoint_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-0:4",
+        f"{LOG_ROOT}/2026_04_15_21_06_50:waypoint_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-1:4",
+        f"{LOG_ROOT}/2026_04_15_21_23_35:waypoint_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-2:4",
+        f"{LOG_ROOT}/2026_04_17_12_10_00:waypoint_cem-h1-n64-t4-v0.3-o6-N64-ds64-dist8-8-rank:ws-3:4",
     ],
     ("PEVA CEM", 64): [
-        f"{LOG_ROOT}/2026_04_13_12_51_51:peva_cem-h8-n64-t2-v0.05-o6-N64-ds64-dist8-8-rank:ws-0:2",
-        f"{LOG_ROOT}/2026_04_14_07_53_38:peva_cem-h8-n64-t2-v0.05-o6-N64-ds64-dist8-8-rank:ws-1:2",
+        f"{LOG_ROOT}/2026_04_15_21_05_52:peva_cem-h8-n64-t2-v0.05-o6-N64-ds64-dist8-8-rank:ws-0:4",
+        f"{LOG_ROOT}/2026_04_15_21_15_06:peva_cem-h8-n64-t2-v0.05-o6-N64-ds64-dist8-8-rank:ws-1:4",
+        f"{LOG_ROOT}/2026_04_16_20_19_27:peva_cem-h8-n64-t2-v0.05-o6-N64-ds64-dist8-8-rank:ws-2:4",
+        f"{LOG_ROOT}/2026_04_17_12_09_55:peva_cem-h8-n64-t2-v0.05-o6-N64-ds64-dist8-8-rank:ws-3:4",
     ],
 }
 
 METRIC = "all_xyz"
-CUMULATIVE_MIN = True  # If True, each step's value is min(step_0, ..., step_i) per task
+CUMULATIVE_MIN = False  # If True, each step's value is min(step_0, ..., step_i) per task
 SHOW_SEM = True
 _base = "train/logs/paper_vis/graphs/mje_vs_cem_iterations"
 _suffixes = ("" if CUMULATIVE_MIN else "_nocummin") + ("_sem" if SHOW_SEM else "")
