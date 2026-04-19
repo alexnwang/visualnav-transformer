@@ -41,67 +41,86 @@ from vint_train.data.misc import XSensConstants, XsensSkeleton
 from vint_train.training.nymeria_training_utils import get_action_smpl_torch
 
 
-def multi_rollout_topk(wm, state_0, state_g, mu, num_rollouts, device,
+def multi_rollout_topk(wm, state_0, state_g, mu, num_rollouts, device, algo,
                        top_k_save=3, topk_wm=8):
     """
-    Two-stage rollout to avoid OOM:
-      1. Run the (cheap) policy for `num_rollouts` samples, score by MJE.
-      2. Run the (expensive) PEVA world model only on the top `topk_wm` rollouts.
-    Return the top `top_k_save` rollout states (sorted ascending by MJE) and stats.
+    For waypoint algos the WM has a cheap policy stage and an expensive PEVA stage,
+    so we do a two-stage filter: policy-only for all `num_rollouts`, then PEVA on
+    the top `topk_wm`, returning the top `top_k_save` by MJE plus stats.
+
+    For `peva`, mu is a single deterministic action sequence — we roll it out once
+    and return a single-element result. `num_rollouts` / `topk_wm` are ignored.
     """
     xsens_offsets = state_g["xsens_offsets"][0]
     skel = XsensSkeleton(xsens_offsets)
     first_pose = state_g["first_pose"]   # 1, 1, 48
     deltas_gt = state_g["deltas"]        # 1, T, 48
 
-    # --- Stage 1: policy-only rollouts (cheap) ---
-    batched_state_0 = {
-        key: repeat(arr, "1 ... -> n ...", n=num_rollouts)
-        for key, arr in state_0.items()
-    }
-    batched_mu = repeat(mu, "1 ... -> n ...", n=num_rollouts)
+    def score_mje(pred_deltas, fp, gt):
+        pred_actions = get_action_smpl_torch(fp, pred_deltas, XSensConstants.upper_body_num_parts)
+        gt_actions = get_action_smpl_torch(fp, gt, XSensConstants.upper_body_num_parts)
+        xyz_dist_matrix, _, leaf_xyz, _ = _compute_part_distance_matrices(
+            pred_actions[:, -1], gt_actions[:, -1], skel
+        )
+        return xyz_dist_matrix.mean(dim=-1), leaf_xyz
 
-    with torch.no_grad():
-        policy_state = wm.policy_only_rollout(state_0=batched_state_0, act=batched_mu)
+    if algo == "peva":
+        # PEVA has a single action sequence (mu) — just roll it out once.
+        with torch.no_grad():
+            wm_state = wm.rollout(state_0=state_0, act=mu)
 
-    # Score all N rollouts by MJE using deltas alone
-    pred_deltas = policy_state["deltas"]  # N, T, 48
-    first_pose_rep = repeat(first_pose, "1 ... -> n ...", n=num_rollouts)
-    deltas_gt_rep = repeat(deltas_gt, "1 ... -> n ...", n=num_rollouts)
-
-    pred_actions = get_action_smpl_torch(first_pose_rep, pred_deltas, XSensConstants.upper_body_num_parts)
-    gt_actions = get_action_smpl_torch(first_pose_rep, deltas_gt_rep, XSensConstants.upper_body_num_parts)
-
-    xyz_dist_matrix, _, leaf_xyz, _ = _compute_part_distance_matrices(
-        pred_actions[:, -1], gt_actions[:, -1], skel
-    )
-    all_xyz = xyz_dist_matrix.mean(dim=-1)  # (N,)
-
-    # --- Stage 2: WM rollout on top-k only (expensive) ---
-    k = min(max(topk_wm, top_k_save), num_rollouts)
-    topk_indices = torch.topk(all_xyz, k, largest=False).indices  # k best, ascending
-
-    topk_state_0 = {key: arr[topk_indices] for key, arr in batched_state_0.items()}
-    topk_deltas = pred_deltas[topk_indices]  # k, T, 48
-    topk_goal_images = policy_state["goal_images"][topk_indices] if policy_state["goal_images"] is not None else None
-
-    with torch.no_grad():
-        wm_state = wm.wm_only_rollout(topk_state_0, topk_deltas, goal_images=topk_goal_images)
-
-    n_save = min(top_k_save, k)
-    saved_states = []
-    for i in range(n_save):
-        orig_idx = topk_indices[i].item()
-        saved_states.append({
+        all_xyz, leaf_xyz = score_mje(wm_state["deltas"], first_pose, deltas_gt)  # length-1 tensors
+        saved_states = [{
             "state": {
-                "generated_obs": wm_state["generated_obs"][i:i+1],
-                "deltas": wm_state["deltas"][i:i+1],
-                "goal_images": wm_state["goal_images"][i:i+1] if wm_state["goal_images"] is not None else None,
+                "generated_obs": wm_state["generated_obs"],
+                "deltas": wm_state["deltas"],
+                "goal_images": wm_state["goal_images"],
             },
-            "mje": all_xyz[orig_idx].item(),
-            "leaf_xyz": leaf_xyz[orig_idx].item(),
-            "orig_idx": orig_idx,
-        })
+            "mje": all_xyz[0].item(),
+            "leaf_xyz": leaf_xyz[0].item(),
+            "orig_idx": 0,
+        }]
+    else:
+        batched_state_0 = {
+            key: repeat(arr, "1 ... -> n ...", n=num_rollouts)
+            for key, arr in state_0.items()
+        }
+        batched_mu = repeat(mu, "1 ... -> n ...", n=num_rollouts)
+        first_pose_rep = repeat(first_pose, "1 ... -> n ...", n=num_rollouts)
+        deltas_gt_rep = repeat(deltas_gt, "1 ... -> n ...", n=num_rollouts)
+
+        # --- Stage 1: policy-only rollouts (cheap) ---
+        with torch.no_grad():
+            policy_state = wm.policy_only_rollout(state_0=batched_state_0, act=batched_mu)
+
+        pred_deltas = policy_state["deltas"]  # N, T, 48
+        all_xyz, leaf_xyz = score_mje(pred_deltas, first_pose_rep, deltas_gt_rep)
+
+        # --- Stage 2: WM rollout on top-k only (expensive) ---
+        k = min(max(topk_wm, top_k_save), num_rollouts)
+        topk_indices = torch.topk(all_xyz, k, largest=False).indices  # k best, ascending
+
+        topk_state_0 = {key: arr[topk_indices] for key, arr in batched_state_0.items()}
+        topk_deltas = pred_deltas[topk_indices]  # k, T, 48
+        topk_goal_images = policy_state["goal_images"][topk_indices] if policy_state["goal_images"] is not None else None
+
+        with torch.no_grad():
+            wm_state = wm.wm_only_rollout(topk_state_0, topk_deltas, goal_images=topk_goal_images)
+
+        n_save = min(top_k_save, k)
+        saved_states = []
+        for i in range(n_save):
+            orig_idx = topk_indices[i].item()
+            saved_states.append({
+                "state": {
+                    "generated_obs": wm_state["generated_obs"][i:i+1],
+                    "deltas": wm_state["deltas"][i:i+1],
+                    "goal_images": wm_state["goal_images"][i:i+1] if wm_state["goal_images"] is not None else None,
+                },
+                "mje": all_xyz[orig_idx].item(),
+                "leaf_xyz": leaf_xyz[orig_idx].item(),
+                "orig_idx": orig_idx,
+            })
 
     stats = {
         "all_mje": all_xyz.cpu().tolist(),
@@ -343,6 +362,7 @@ def main(args):
             saved_states, stats = multi_rollout_topk(
                 cem_planner.wm, trans_obs_0, trans_obs_g, vmu,
                 num_rollouts=args.num_vis_rollouts, device=device,
+                algo=algo,
                 top_k_save=args.top_k_save,
             )
             print(f"  [{vname}] top1 mje={saved_states[0]['mje']:.4f} leaf={saved_states[0]['leaf_xyz']:.4f}  "
