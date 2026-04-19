@@ -31,9 +31,26 @@ from datetime import datetime
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, DistributedSampler
+from PIL import Image as PILImage
+from torch.utils.data import DataLoader, DistributedSampler, Subset
 from torchvision import transforms
 from torchvision.utils import save_image
+
+
+def _save_stacked_preview(src_paths, dst_path: str, max_height: int = 256):
+    imgs = []
+    for p in src_paths:
+        img = PILImage.open(p).convert("RGB")
+        img.thumbnail((10 ** 5, max_height), PILImage.LANCZOS)
+        imgs.append(img)
+    width = max(i.width for i in imgs)
+    total_h = sum(i.height for i in imgs)
+    stacked = PILImage.new("RGB", (width, total_h), (255, 255, 255))
+    y = 0
+    for i in imgs:
+        stacked.paste(i, (0, y))
+        y += i.height
+    stacked.save(dst_path)
 
 sys.path.append("/home/anw2067/visualnav-transformer/train")
 
@@ -126,9 +143,23 @@ def main(args):
         waypoint_spacing=data_config.get("waypoint_spacing", 1),
         gaussian_normalization_stats_path=data_config.get("gaussian_normalization_stats_path", None),
     )
-    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank,
-                                 shuffle=args.shuffle, seed=seed)
-    dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=0)
+    if args.target_tracks:
+        lookup = {f"{t['track']}-{t['curr_time']}": i for i, t in enumerate(dataset.tasks)}
+        indices, missing = [], []
+        for k in args.target_tracks:
+            if k in lookup:
+                indices.append(lookup[k])
+            else:
+                missing.append(k)
+        if missing:
+            print(f"WARNING: target tracks not found in split: {missing}")
+        dataset = Subset(dataset, indices)
+        sampler = None
+        dataloader = DataLoader(dataset, batch_size=1, sampler=None, shuffle=False, num_workers=0)
+    else:
+        sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank,
+                                     shuffle=args.shuffle, seed=seed)
+        dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=0)
 
     # --- output dir ---
     datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
@@ -313,6 +344,15 @@ def main(args):
             f.write(f"best_leaf_xyz: {best_leaf:.4f}\n")
             f.write(f"best_idx:      {best}\n")
 
+        # Low-res stacked preview in log_dir for quick browsing: GT-skin over pred-wm-skin
+        if args.use_peva:
+            _save_stacked_preview(
+                [os.path.join(task_dir, "gt_rollout_skin.png"),
+                 os.path.join(task_dir, "pred_wm_rollout_skin.png")],
+                os.path.join(log_dir, f"{task_name}__preview.png"),
+                max_height=args.preview_max_height,
+            )
+
         count += 1
         if args.num_samples_to_plan > 0 and count >= args.num_samples_to_plan:
             break
@@ -339,6 +379,11 @@ if __name__ == "__main__":
     parser.add_argument("--shuffle", action="store_true")
     parser.add_argument("--num_samples_to_plan", type=int, default=64)
     parser.add_argument("--skip_tasks", type=int, default=0)
+    parser.add_argument("--preview_max_height", type=int, default=256,
+                        help="Max height (px) for low-res preview copies saved into log_dir")
+    parser.add_argument("--target_tracks", type=str, nargs="+", default=None,
+                        help="List of 'track-curr_time' keys. When set, runs only these "
+                             "tasks (in order) and ignores shuffle/world_size/skip_tasks/num_samples_to_plan.")
 
     parser.add_argument("--camera_data_folder", type=str,
                         default="/home/anw2067/scratch/nymeria_visibility_matrix",
