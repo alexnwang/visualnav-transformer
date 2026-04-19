@@ -194,6 +194,7 @@ def main(args):
     for idx, batch in enumerate(dataloader):
         if skipped < args.skip_tasks:
             skipped += 1
+            count += 1
             continue
         obs_images = batch["obs_images"]               # 1, context_size+1, 3, H, W
         goal_image = batch["goal_image"]               # 1, 3, H, W
