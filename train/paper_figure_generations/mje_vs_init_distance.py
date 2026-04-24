@@ -1,3 +1,4 @@
+import argparse
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -34,10 +35,11 @@ RUNS = {
 
 METRIC = "all_xyz"
 CUMULATIVE_MIN = False
+SHOW_SEM = True
 BUCKET_MODE = "quantile"  # "fixed" for evenly spaced, "quantile" for equal-count bins
 BUCKET_WIDTH = 0.5  # meters (used when BUCKET_MODE == "fixed")
 NUM_BUCKETS = 20     # (used when BUCKET_MODE == "quantile")
-OUTPUT_PATH = "train/logs/paper_vis/graphs/mje_vs_init_distance.pdf" if CUMULATIVE_MIN else "train/logs/paper_vis/graphs/mje_vs_init_distance_nocummin.pdf"
+OUTPUT_BASE = "train/logs/paper_vis/graphs/mje_vs_init_distance"
 
 # ============================================================
 
@@ -58,10 +60,19 @@ def load_all_tasks(dist_runs: dict, metric: str, cumulative_min: bool = False):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cummin", action=argparse.BooleanOptionalAction, default=CUMULATIVE_MIN,
+                        help="If set, take best value across all CEM steps per task.")
+    parser.add_argument("--sem", action=argparse.BooleanOptionalAction, default=SHOW_SEM,
+                        help="If set, shade SEM band around each curve.")
+    args = parser.parse_args()
+
+    output_path = f"{OUTPUT_BASE}{'' if args.cummin else '_nocummin'}{'_sem' if args.sem else ''}.pdf"
+
     fig, ax = plt.subplots(figsize=(6, 4))
 
     # Compute bucket edges
-    first_inits, _ = load_all_tasks(next(iter(RUNS.values())), METRIC, CUMULATIVE_MIN)
+    first_inits, _ = load_all_tasks(next(iter(RUNS.values())), METRIC, args.cummin)
     if BUCKET_MODE == "fixed":
         bin_start = np.floor(first_inits.min() / BUCKET_WIDTH) * BUCKET_WIDTH
         bin_end = np.ceil(first_inits.max() / BUCKET_WIDTH) * BUCKET_WIDTH
@@ -73,7 +84,7 @@ def main():
     num_buckets = len(bucket_edges) - 1
 
     for label, dist_runs in RUNS.items():
-        inits, finals = load_all_tasks(dist_runs, METRIC, cumulative_min=CUMULATIVE_MIN)
+        inits, finals = load_all_tasks(dist_runs, METRIC, cumulative_min=args.cummin)
         centers, means, sems = [], [], []
         for i in range(num_buckets):
             lo, hi = bucket_edges[i], bucket_edges[i + 1]
@@ -86,7 +97,8 @@ def main():
             sems.append(bucket_vals.std() / np.sqrt(len(bucket_vals)))
         centers, means, sems = np.array(centers), np.array(means), np.array(sems)
         line, = ax.plot(centers, means, marker="o", label=label, markersize=4)
-        ax.fill_between(centers, means - sems, means + sems, color=line.get_color(), alpha=0.3)
+        if args.sem:
+            ax.fill_between(centers, means - sems, means + sems, color=line.get_color(), alpha=0.3)
 
     # Identity line: y = x (no improvement from planning)
     xlims = ax.get_xlim()
@@ -99,9 +111,9 @@ def main():
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    Path(OUTPUT_PATH).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUTPUT_PATH, dpi=150)
-    print(f"Saved to {OUTPUT_PATH}")
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    print(f"Saved to {output_path}")
     plt.close(fig)
 
 

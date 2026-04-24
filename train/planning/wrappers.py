@@ -15,7 +15,7 @@ from planning.sampling import peva_sample, policy_sample, waypoint_sample
 
 def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
                            fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T,
-                           overlay='skeleton', smpl_alpha=0.7):
+                           overlay='skeleton', smpl_alpha=0.7, show_text=True):
     """
     Build a (T, 3, H, W) sequence of curr_obs with skeleton overlays per timestep.
     If fisheye_params/R_C_pelvis/t_C_pelvis are None, returns blank (zero) frames.
@@ -56,6 +56,7 @@ def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
                     image_size, alpha=smpl_alpha,
                     xsens_offsets=xsens_offsets,
                     draw_skeleton=draw_skel,
+                    show_text=show_text,
                 )
             else:
                 from planning.vis_utils import pose_to_image_coords_v2, draw_image_coords as draw_skel_fn
@@ -67,7 +68,7 @@ def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
                     pred_actions[:, t], R_C_pelvis, t_C_pelvis, fisheye_params,
                     xsens_offsets, image_size=image_size
                 )  # (1, 15, 2)
-                draw_skel_fn(draw, image_coords)
+                draw_skel_fn(draw, image_coords, show_text=show_text)
             skel_tensors.append(T_transforms.ToTensor()(img_pil))
         return torch.stack(skel_tensors).to(device)  # (T, 3, H, W)
     else:

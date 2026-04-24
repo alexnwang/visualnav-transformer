@@ -1,3 +1,4 @@
+import argparse
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -46,9 +47,7 @@ RUNS = {
 METRIC = "dreamsim"
 CUMULATIVE_MIN = False
 SHOW_SEM = False
-_base = "train/logs/paper_vis/graphs/dreamsim_vs_cem_iterations"
-_suffixes = ("" if CUMULATIVE_MIN else "_nocummin") + ("_sem" if SHOW_SEM else "")
-OUTPUT_PATH = f"{_base}{_suffixes}.pdf"
+OUTPUT_BASE = "train/logs/paper_vis/graphs/dreamsim_vs_cem_iterations"
 
 # ============================================================
 
@@ -66,22 +65,33 @@ def _load_dicts(run_dirs, filename):
 
 def load_mean_curve(run_dirs, metric: str, cumulative_min: bool = False) -> np.ndarray:
     """Load dreamsim curve prepended with dreamsim_init from the run's own task dicts.
+    cumulative_min is applied only across CEM steps — the init step is shown as-is and
+    excluded from the min.
     run_dirs can be a single path string or a list of paths (for multi-rank runs)."""
     eval_data = _load_dicts(run_dirs, "accum_eval_metric_dicts.pth")
     task_dicts = _load_dicts(run_dirs, "accum_task_dicts.pth")
 
     task_keys = sorted(eval_data.keys())
     init_vals = np.array([task_dicts[k]["task"]["dreamsim_init"] for k in task_keys])
-    curves = np.array([eval_data[k][metric] for k in task_keys])  # (num_tasks, num_steps)
-    curves = np.concatenate([init_vals[:, None], curves], axis=1)
+    cem_curves = np.array([eval_data[k][metric] for k in task_keys])  # (num_tasks, num_steps)
     if cumulative_min:
-        curves = np.minimum.accumulate(curves, axis=1)
+        cem_curves = np.minimum.accumulate(cem_curves, axis=1)
+    curves = np.concatenate([init_vals[:, None], cem_curves], axis=1)
     means = curves.mean(axis=0)
     sems = curves.std(axis=0) / np.sqrt(len(curves))
     return means, sems
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cummin", action=argparse.BooleanOptionalAction, default=CUMULATIVE_MIN,
+                        help="If set, each step's value is min(step_0, ..., step_i) per task.")
+    parser.add_argument("--sem", action=argparse.BooleanOptionalAction, default=SHOW_SEM,
+                        help="If set, shade SEM band around each curve.")
+    args = parser.parse_args()
+
+    output_path = f"{OUTPUT_BASE}{'' if args.cummin else '_nocummin'}{'_sem' if args.sem else ''}.pdf"
+
     fig, ax = plt.subplots(figsize=(6, 4))
 
     # Assign a consistent color per method
@@ -94,12 +104,12 @@ def main():
             key = (method, n)
             if key not in RUNS:
                 continue
-            means, sems = load_mean_curve(RUNS[key], METRIC, cumulative_min=CUMULATIVE_MIN)
+            means, sems = load_mean_curve(RUNS[key], METRIC, cumulative_min=args.cummin)
             steps = np.arange(len(means))
             color = method_colors[method]
             ax.plot(steps, means, marker=MARKERS[n], color=color,
                     markersize=5, markeredgecolor="black", markeredgewidth=0.5)
-            if SHOW_SEM:
+            if args.sem:
                 ax.fill_between(steps, means - sems, means + sems, color=color, alpha=0.15)
 
     # Combined legend: method → color line, n → marker shape
@@ -118,9 +128,9 @@ def main():
     ax.set_ylabel("DreamSIM")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    Path(OUTPUT_PATH).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(OUTPUT_PATH, dpi=150)
-    print(f"Saved to {OUTPUT_PATH}")
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    print(f"Saved to {output_path}")
     plt.close(fig)
 
 

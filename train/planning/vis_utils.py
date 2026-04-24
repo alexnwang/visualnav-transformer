@@ -295,7 +295,8 @@ def _get_renderer(image_size):
 def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
                          fisheye_params, image_size, alpha=0.7,
                          xsens_offsets=None, draw_skeleton=False,
-                         mesh_color=(0.4, 0.6, 0.8)):
+                         mesh_color=(0.4, 0.6, 0.8),
+                         inside_mesh_alpha=0.0, show_text=True):
     """
     Render a skinned SMPL body mesh composited onto curr_obs_img.
 
@@ -421,10 +422,24 @@ def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
     cx = (2879.0 - cv) * scale
     cy = cu * scale
     
-    # 10 — Render with PyRender
+    # 10 — Render with PyRender.
     mesh_trimesh = trimesh.Trimesh(
         vertices=verts_gl.astype(np.float64), faces=faces, process=False
     )
+
+    # If the camera (origin in verts_gl) is inside the mesh, scale the overlay
+    # alpha by inside_mesh_alpha (0 = skip the mesh, 1 = render normally).
+    # Use signed_distance (winding-number based) — more robust than .contains
+    # for SMPL-X, which has non-watertight submeshes (eyes, teeth).
+    # If the camera (origin in verts_gl) is inside the mesh, scale the overlay
+    # alpha by inside_mesh_alpha. Uses winding-number signed distance, which
+    # requires the `rtree` package (conda install -c conda-forge rtree).
+    from trimesh.proximity import ProximityQuery
+    sd = ProximityQuery(mesh_trimesh).signed_distance(
+        np.zeros((1, 3), dtype=np.float64)
+    )[0]
+    camera_inside = bool(sd > 0)
+    effective_alpha = alpha * inside_mesh_alpha if camera_inside else alpha
     obs_np = (
         curr_obs_img.permute(1, 2, 0).detach().cpu().numpy() * 255
     ).clip(0, 255).astype(np.uint8)
@@ -444,36 +459,39 @@ def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
     light = pyrender.DirectionalLight(color=[1., 1., 1.], intensity=4.0)
     scene.add(light, pose=np.eye(4))
 
-    renderer = _get_renderer(image_size)
-    try:
-        color_render, depth_render = renderer.render(scene)
-    except (OpenGL.error.GLError, ValueError):
-        _reset_renderer()
+    if effective_alpha <= 0:
+        color_render = None
+    else:
         renderer = _get_renderer(image_size)
-        # Rebuild everything — old objects are bound to the deleted GL context
-        mesh_r = pyrender.Mesh.from_trimesh(mesh_trimesh, material=material, smooth=True)
-        cam = pyrender.IntrinsicsCamera(fx=fx, fy=fy, cx=cx, cy=cy, znear=0.01, zfar=100.0)
-        light = pyrender.DirectionalLight(color=[1., 1., 1.], intensity=4.0)
-        scene = pyrender.Scene(ambient_light=[0.4, 0.4, 0.4])
-        scene.add(mesh_r)
-        scene.add(cam, pose=np.eye(4))
-        scene.add(light, pose=np.eye(4))
         try:
             color_render, depth_render = renderer.render(scene)
         except (OpenGL.error.GLError, ValueError):
-            logger.warning("OpenGL render failed twice, skipping SMPL overlay")
             _reset_renderer()
-            color_render = None
+            renderer = _get_renderer(image_size)
+            # Rebuild everything — old objects are bound to the deleted GL context
+            mesh_r = pyrender.Mesh.from_trimesh(mesh_trimesh, material=material, smooth=True)
+            cam = pyrender.IntrinsicsCamera(fx=fx, fy=fy, cx=cx, cy=cy, znear=0.01, zfar=100.0)
+            light = pyrender.DirectionalLight(color=[1., 1., 1.], intensity=4.0)
+            scene = pyrender.Scene(ambient_light=[0.4, 0.4, 0.4])
+            scene.add(mesh_r)
+            scene.add(cam, pose=np.eye(4))
+            scene.add(light, pose=np.eye(4))
+            try:
+                color_render, depth_render = renderer.render(scene)
+            except (OpenGL.error.GLError, ValueError):
+                logger.warning("OpenGL render failed twice, skipping SMPL overlay")
+                _reset_renderer()
+                color_render = None
 
     if color_render is not None:
         render_pil = Image.fromarray(color_render)
-        min_depth = 0.01
-        fade_range = 0.03
+        min_depth = 0.00
+        fade_range = 0.05
         alpha_map = np.zeros_like(depth_render)
         visible = depth_render > 0
         alpha_map[visible] = np.clip(
             (depth_render[visible] - min_depth) / fade_range, 0.0, 1.0
-        ) * alpha
+        ) * effective_alpha
         mask = (alpha_map * 255).astype(np.uint8)
         obs_pil.paste(render_pil, mask=Image.fromarray(mask, mode='L'))
 
@@ -498,6 +516,6 @@ def render_smpl_on_image(curr_obs_img, pose, R_C_pelvis, t_C_pelvis,
         image_coords = fk_disp_np.unsqueeze(0)  # (1, 15, 2)
 
         draw = ImageDraw.Draw(obs_pil)
-        draw_image_coords(draw, image_coords)
+        draw_image_coords(draw, image_coords, show_text=show_text)
 
     return obs_pil

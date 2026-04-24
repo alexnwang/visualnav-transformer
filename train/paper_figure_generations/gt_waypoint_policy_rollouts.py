@@ -270,6 +270,7 @@ def main(args):
                 curr_obs_img, pred_or_gt_deltas, first_pose, xsens_offsets[0],
                 fisheye_params, R_C_pelvis, t_C_pelvis, image_size, T_steps,
                 overlay=overlay, smpl_alpha=alpha,
+                show_text=not args.no_skeleton_text,
             )
 
         pred_top_skin   = _render(best_pred_deltas, 'both',     0.9)
@@ -384,6 +385,9 @@ if __name__ == "__main__":
     parser.add_argument("--target_tracks", type=str, nargs="+", default=None,
                         help="List of 'track-curr_time' keys. When set, runs only these "
                              "tasks (in order) and ignores shuffle/world_size/skip_tasks/num_samples_to_plan.")
+
+    parser.add_argument("--no_skeleton_text", action="store_true",
+                        help="Skip drawing joint-name text labels on skeleton overlays.")
 
     parser.add_argument("--camera_data_folder", type=str,
                         default="/home/anw2067/scratch/nymeria_visibility_matrix",

@@ -1,3 +1,4 @@
+import argparse
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -35,7 +36,8 @@ RUNS = {
 
 METRIC = "all_xyz"
 CUMULATIVE_MIN = False  # If True, take best value across all CEM steps per task
-OUTPUT_PATH = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/graphs/mje_vs_horizon.pdf" if CUMULATIVE_MIN else "/home/anw2067/visualnav-transformer/train/logs/paper_vis/graphs/mje_vs_horizon_nocummin.pdf"
+SHOW_SEM = True
+OUTPUT_BASE = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/graphs/mje_vs_horizon"
 
 # ============================================================
 
@@ -60,6 +62,15 @@ def load_init_mean_sem(run_dir: str) -> tuple[float, float]:
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cummin", action=argparse.BooleanOptionalAction, default=CUMULATIVE_MIN,
+                        help="If set, take best value across all CEM steps per task.")
+    parser.add_argument("--sem", action=argparse.BooleanOptionalAction, default=SHOW_SEM,
+                        help="If set, shade SEM band around each curve.")
+    args = parser.parse_args()
+
+    output_path = f"{OUTPUT_BASE}{'' if args.cummin else '_nocummin'}{'_sem' if args.sem else ''}.pdf"
+
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.axvline(x=8, color="black", linestyle="-", alpha=0.5, label="Training timesteps")
 
@@ -69,15 +80,17 @@ def main():
     init_means, init_sems = zip(*[load_init_mean_sem(first_runs[d]) for d in init_dists])
     init_means, init_sems = np.array(init_means), np.array(init_sems)
     ax.plot(init_dists, init_means, marker="s", linestyle="--", color="gray", label="Initial MJE")
-    ax.fill_between(init_dists, init_means - init_sems, init_means + init_sems, color="gray", alpha=0.3)
+    if args.sem:
+        ax.fill_between(init_dists, init_means - init_sems, init_means + init_sems, color="gray", alpha=0.3)
 
     for label, dist_runs in RUNS.items():
         dists = sorted(dist_runs.keys())
-        means, sems = zip(*[load_final_mean_sem(dist_runs[d], METRIC, cumulative_min=CUMULATIVE_MIN) for d in dists])
+        means, sems = zip(*[load_final_mean_sem(dist_runs[d], METRIC, cumulative_min=args.cummin) for d in dists])
         means, sems = np.array(means), np.array(sems)
         label = "Initial MJE" if "no planning" in label else label
         line, = ax.plot(dists, means, marker="o", label=label)
-        ax.fill_between(dists, means - sems, means + sems, color=line.get_color(), alpha=0.3)
+        if args.sem:
+            ax.fill_between(dists, means - sems, means + sems, color=line.get_color(), alpha=0.3)
 
     ax.set_xlabel("Goal Distance (timesteps)")
     ax.set_ylabel("Mean Joint Error (m)")
@@ -85,8 +98,9 @@ def main():
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(OUTPUT_PATH, dpi=150)
-    print(f"Saved to {OUTPUT_PATH}")
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    print(f"Saved to {output_path}")
     plt.close(fig)
 
 

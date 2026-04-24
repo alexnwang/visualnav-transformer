@@ -24,7 +24,7 @@ from torchvision import transforms
 from torchvision.utils import save_image
 from PIL import Image, ImageDraw
 from einops import repeat
-from torch.utils.data import DistributedSampler, DataLoader
+from torch.utils.data import DistributedSampler, DataLoader, Subset
 
 from peva.diffusion import create_diffusion
 from plan_cem import build_waypoint_cem, build_peva_cem, MODEL_DIRECTORY
@@ -238,8 +238,22 @@ def main(args):
         waypoint_spacing=data_config.get("waypoint_spacing", 1),
         gaussian_normalization_stats_path=data_config.get("gaussian_normalization_stats_path", None),
     )
-    sampler = DistributedSampler(dataset, num_replicas=args.world_size, rank=args.rank, shuffle=args.shuffle, seed=seed)
-    dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=0)
+    if args.target_tracks:
+        lookup = {f"{t['track']}-s{t['curr_time']}-g{t['goal_time']}": i
+                  for i, t in enumerate(dataset.tasks)}
+        indices, missing = [], []
+        for k in args.target_tracks:
+            if k in lookup:
+                indices.append(lookup[k])
+            else:
+                missing.append(k)
+        if missing:
+            print(f"WARNING: target tracks not found in split: {missing}")
+        dataset = Subset(dataset, indices)
+        dataloader = DataLoader(dataset, batch_size=1, sampler=None, shuffle=False, num_workers=0)
+    else:
+        sampler = DistributedSampler(dataset, num_replicas=args.world_size, rank=args.rank, shuffle=args.shuffle, seed=seed)
+        dataloader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=0)
 
     # ---------- Main loop ----------
     task_results = []
@@ -399,19 +413,18 @@ def main(args):
         # Save GT visualization
         curr_image = obs_images[0, -1]
         n_steps = gt_frames.shape[1]
-        gt_skel_imgs = []
-        for t in range(n_steps):
-            img_pil = Image.fromarray((255.0 * curr_image.permute(1, 2, 0)).to(torch.uint8).numpy())
-            draw = ImageDraw.Draw(img_pil)
-            coords = gt_image_coords_seq[0, t]
-            draw_image_coords(draw, coords[None])
-            gt_skel_imgs.append(transforms.ToTensor()(img_pil))
+        gt_skel_imgs = build_skeleton_top_seq(
+            curr_image, deltas, first_pose, xsens_offsets[0],
+            fisheye_params, R_C_pelvis, t_C_pelvis,
+            curr_image.shape[-1], n_steps,
+            overlay='skeleton',
+        )
         save_action_obs_sequence_viz(
             save_path=f"{task_dir}/gt_action_obs_seq.png",
             goal_image=goal_image[0],
             curr_obs=curr_image,
             goal_obs=goal_obs[0],
-            top_seq=torch.stack(gt_skel_imgs),
+            top_seq=gt_skel_imgs,
             bot_seq=gt_frames[0],
         )
         if fisheye_params is not None:
@@ -546,6 +559,9 @@ if __name__ == "__main__":
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--camera_data_folder", type=str,
                         default="/home/anw2067/scratch/nymeria_visibility_matrix")
+    parser.add_argument("--target_tracks", type=str, nargs="+", default=None,
+                        help="Specific tasks to run, formatted as '{track}-s{curr_time}-g{goal_time}'. "
+                             "When set, --rank/--world_size/--shuffle are ignored.")
 
     # Models
     parser.add_argument("--peva_config", type=str,
