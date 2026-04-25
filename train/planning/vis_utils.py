@@ -173,7 +173,36 @@ def get_T_C_pelvis(nymeria_dp, index):
     
     return T_C_Hd @ T_Hd_Wd @ T_Wd_P
 
-def draw_image_coords(draw, goal_image_coords, color=(255, 255, 255), num_segments=XSensConstants.upper_body_num_parts, show_text=True, radius=3):
+_LEAF_WAYPOINT_COLOR_NAMES = ["red", "green", "blue", "yellow"]  # matches draw_waypoints.color_order
+
+
+def _default_per_joint_colors(num_segments):
+    """White for every joint, except leaf joints (Pelvis/Head/R_Hand/L_Hand)
+    which take the same colors as `draw_waypoints` uses for their waypoints."""
+    from PIL import ImageColor
+    arr = np.full((num_segments, 3), 255, dtype=np.uint8)
+    for leaf_name, color_name in zip(XSensConstants.leaf_parts, _LEAF_WAYPOINT_COLOR_NAMES):
+        idx = XSensConstants.part_names.index(leaf_name)
+        if idx < num_segments:
+            arr[idx] = np.asarray(ImageColor.getrgb(color_name), dtype=np.uint8)
+    return arr
+
+
+def draw_image_coords(draw, goal_image_coords, color=None, num_segments=XSensConstants.upper_body_num_parts, show_text=True, radius=3):
+    """`color` is either a single (R, G, B) tuple applied to every joint, or an
+    array-like of shape (>=num_segments, 3) giving a per-joint color (used for
+    that joint's dot, label, and the line to its parent). If None, defaults to
+    waypoint colors for leaf joints (Pelvis/Head/R_Hand/L_Hand) and white for
+    the rest."""
+    if color is None:
+        color = _default_per_joint_colors(num_segments)
+    color_arr = np.asarray(color)
+    per_joint = color_arr.ndim == 2
+    if per_joint:
+        joint_colors = [tuple(int(c) for c in color_arr[i]) for i in range(color_arr.shape[0])]
+    else:
+        single_color = tuple(int(c) for c in color_arr)
+
     num_visible = 0
     for part_name in XSensConstants.part_names[:num_segments]:
         index = XSensConstants.part_names.index(part_name)
@@ -184,13 +213,14 @@ def draw_image_coords(draw, goal_image_coords, color=(255, 255, 255), num_segmen
             continue
         num_visible += 1
 
-        draw.ellipse([point[0]-radius, point[1]-radius, point[0]+radius, point[1]+radius], fill=color)
+        c = joint_colors[index] if per_joint else single_color
+        draw.ellipse([point[0]-radius, point[1]-radius, point[0]+radius, point[1]+radius], fill=c)
         if any(x in part_name for x in ["Pelvis", "Head", "Hand"]) and show_text:
-            draw.text((point[0], point[1]), part_name, fill=color)
+            draw.text((point[0], point[1]), part_name, fill=c)
         if parent_index != -1:
             parent_point = goal_image_coords[0, parent_index]
             if not all(parent_point == -1):
-                draw.line([*point, *parent_point], fill=color)
+                draw.line([*point, *parent_point], fill=c)
     return int(num_visible)
 
 def get_num_visible(goal_image_coords, num_segments=XSensConstants.upper_body_num_parts):
