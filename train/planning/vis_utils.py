@@ -188,12 +188,13 @@ def _default_per_joint_colors(num_segments):
     return arr
 
 
-def draw_image_coords(draw, goal_image_coords, color=None, num_segments=XSensConstants.upper_body_num_parts, show_text=True, radius=3):
-    """`color` is either a single (R, G, B) tuple applied to every joint, or an
-    array-like of shape (>=num_segments, 3) giving a per-joint color (used for
-    that joint's dot, label, and the line to its parent). If None, defaults to
-    waypoint colors for leaf joints (Pelvis/Head/R_Hand/L_Hand) and white for
-    the rest."""
+def draw_image_coords(draw, goal_image_coords, color=None, num_segments=XSensConstants.upper_body_num_parts, show_text=True, radius=3, line_color=(255, 255, 255)):
+    """`color` is either a single (R, G, B) tuple applied to every joint dot/
+    label, or an array-like of shape (>=num_segments, 3) giving a per-joint
+    color. If None, defaults to waypoint colors for leaf joints (Pelvis/Head/
+    R_Hand/L_Hand) and white for the rest. `line_color` is used for all
+    edges connecting joints (always a single color, never per-joint).
+    Edges are drawn first so colored joint dots sit on top of them."""
     if color is None:
         color = _default_per_joint_colors(num_segments)
     color_arr = np.asarray(color)
@@ -202,26 +203,36 @@ def draw_image_coords(draw, goal_image_coords, color=None, num_segments=XSensCon
         joint_colors = [tuple(int(c) for c in color_arr[i]) for i in range(color_arr.shape[0])]
     else:
         single_color = tuple(int(c) for c in color_arr)
+    line_c = tuple(int(c) for c in line_color)
 
-    num_visible = 0
+    visible_indices = []
     for part_name in XSensConstants.part_names[:num_segments]:
         index = XSensConstants.part_names.index(part_name)
-        parent_index = XSensConstants.kintree_parents[index]
-
         point = goal_image_coords[0, index]
         if all(point == -1):
             continue
-        num_visible += 1
+        visible_indices.append(index)
 
+    # Pass 1: edges (single color, drawn underneath the dots).
+    for index in visible_indices:
+        parent_index = XSensConstants.kintree_parents[index]
+        if parent_index == -1:
+            continue
+        parent_point = goal_image_coords[0, parent_index]
+        if all(parent_point == -1):
+            continue
+        point = goal_image_coords[0, index]
+        draw.line([*point, *parent_point], fill=line_c)
+
+    # Pass 2: dots and labels (per-joint colors), drawn on top.
+    for index in visible_indices:
+        part_name = XSensConstants.part_names[index]
+        point = goal_image_coords[0, index]
         c = joint_colors[index] if per_joint else single_color
         draw.ellipse([point[0]-radius, point[1]-radius, point[0]+radius, point[1]+radius], fill=c)
         if any(x in part_name for x in ["Pelvis", "Head", "Hand"]) and show_text:
             draw.text((point[0], point[1]), part_name, fill=c)
-        if parent_index != -1:
-            parent_point = goal_image_coords[0, parent_index]
-            if not all(parent_point == -1):
-                draw.line([*point, *parent_point], fill=c)
-    return int(num_visible)
+    return int(len(visible_indices))
 
 def get_num_visible(goal_image_coords, num_segments=XSensConstants.upper_body_num_parts):
     return int((1.-(goal_image_coords[0, :num_segments] == -1).all(-1).float()).sum())
