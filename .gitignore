@@ -12,6 +12,8 @@ data_jsons
 test_dir
 nymeria_camera_dir
 outputs
+train/data_splits/**/*.pkl
+.claude
 
 *.png
 *.jpg
