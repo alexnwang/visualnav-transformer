@@ -25,6 +25,55 @@ SLURM_HEADER="#!/bin/bash
 # singularity exec --nv --overlay /scratch/anw2067/nymeria.sqf:ro /share/apps/images/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif bash -l -c "conda activate nomad_train2 && python plan_cem_viz.py -a waypoint -n 128 -o 16 -t 8 -v 0.5 -R 32 -H 1 --peva_diffusion_steps 250 --nomad_model draw_mask --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
 
 ########################################################
+# 04/26, rerender_cem_viz local one-liner — best mu only (MJE + WP), SRC_B + SRC_C
+########################################################
+
+CEM_VIZ_ROOT=/scratch/anw2067/nomad-logs/cem_viz
+RERENDER_ARGS="--steps best --peva_context_size 7 --nomad_model draw_mask"
+${SING} bash -l -c "conda activate nomad_train2 && cd /home/anw2067/visualnav-transformer/train && python paper_figure_generations/rerender_cem_viz.py --source_log_dir ${CEM_VIZ_ROOT}/2026_04_18_12_49_12:viz_waypoint_cem-h1-n8-t8-v0.5-o12-R128-ds64-visds250-dist8-8:ws2-r0 --tasks 0.887_20230724_s1_justin_heath_act0_5gtnkm-s1760-g1768 0.822_20230905_s1_elizabeth_morgan_act3_smhnlg-s2794-g2802 0.609_20231122_s1_harold_copeland_act2_k1ngjh-s1758-g1766 ${RERENDER_ARGS} && python paper_figure_generations/rerender_cem_viz.py --source_log_dir ${CEM_VIZ_ROOT}/2026_04_15_13_19_52:viz_waypoint_cem-h1-n8-t8-v0.5-o12-R128-ds64-visds250-dist8-8 --tasks 0.781_20230817_s1_rebecca_ward_act2_39a7o2-s1124-g1132 ${RERENDER_ARGS}"
+
+########################################################
+# 04/26, rerender_cem_viz across three existing waypoint runs (draw_mask, ctx6) — sbatch
+########################################################
+
+# CEM_VIZ_ROOT=/scratch/anw2067/nomad-logs/cem_viz
+
+# SRC_A="${CEM_VIZ_ROOT}/2026_04_18_18_49_47:viz_waypoint_cem-h1-n8-t8-v0.5-o12-R128-ds64-visds250-dist8-8:ws2-r1"
+# TASKS_A=(
+#     0.390_20230817_s1_rebecca_ward_act2_39a7o2-s1124-g1132
+#     0.374_20230829_s0_ray_humphrey_act4_7lkmhe-s2687-g2695
+# )
+# sbatch --time=4:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=rerender_cem_viz-srcA-2tasks
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python paper_figure_generations/rerender_cem_viz.py --source_log_dir ${SRC_A} --tasks ${TASKS_A[@]} --steps all --peva_context_size 7 --nomad_model draw_mask"
+# EOF
+
+# SRC_B="${CEM_VIZ_ROOT}/2026_04_18_12_49_12:viz_waypoint_cem-h1-n8-t8-v0.5-o12-R128-ds64-visds250-dist8-8:ws2-r0"
+# TASKS_B=(
+#     0.822_20230905_s1_elizabeth_morgan_act3_smhnlg-s2794-g2802
+#     0.609_20231122_s1_harold_copeland_act2_k1ngjh-s1758-g1766
+# )
+# sbatch --time=4:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=rerender_cem_viz-srcB-3tasks
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python paper_figure_generations/rerender_cem_viz.py --source_log_dir ${SRC_B} --tasks ${TASKS_B[@]} --steps all --peva_context_size 7 --nomad_model draw_mask"
+# EOF
+
+# SRC_C="${CEM_VIZ_ROOT}/2026_04_15_13_19_52:viz_waypoint_cem-h1-n8-t8-v0.5-o12-R128-ds64-visds250-dist8-8"
+# TASKS_C=(
+#     0.781_20230817_s1_rebecca_ward_act2_39a7o2-s1124-g1132
+# )
+# sbatch --time=4:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=rerender_cem_viz-srcC-1task
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python paper_figure_generations/rerender_cem_viz.py --source_log_dir ${SRC_C} --tasks ${TASKS_C[@]} --steps all --peva_context_size 7 --nomad_model draw_mask"
+# EOF
+
+########################################################
 # 04/21, plan_cem_viz waypoint draw_mask dist8 on 3 cherry-picked tasks (ctx6, matches peva viz split)
 ########################################################
 

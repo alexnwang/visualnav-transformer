@@ -218,50 +218,6 @@ def main(args):
         leaf_wp = goal_image_coords[:, XSensConstants.leaf_indices]                # 1, 4, 2
         goal_image_wp = draw_waypoints(obs_images[:, -1], leaf_wp)                 # 1, 3, H, W
 
-        # --- policy sample, N in parallel ---
-        N = args.num_eval_samples
-        policy_obs_1 = imagenet_norm(
-            obs_images[:, -policy_ctx - 1:].flatten(0, 1)
-        ).unflatten(0, (1, policy_ctx + 1))                                         # 1, ctx+1, 3, H, W
-        goal_for_policy_1 = imagenet_norm(goal_image_wp)                            # 1, 3, H, W
-        ctx_poses_1 = context_poses[:, -policy_ctx - 1:]                            # 1, ctx+1, 48
-
-        policy_obs_N = policy_obs_1.expand(N, -1, -1, -1, -1)
-        goal_N       = goal_for_policy_1.expand(N, -1, -1, -1)
-        ctx_poses_N  = ctx_poses_1.expand(N, -1, -1)
-
-        pred_deltas = policy_sample(
-            policy, noise_scheduler,
-            policy_obs_N, goal_N, ctx_poses_N,
-            pred_horizon, action_dim, device,
-        )                                                                           # N, T, 48
-
-        # --- pick best sample by MJE (mean per-joint xyz error) at final timestep ---
-        first_pose_N  = first_pose.expand(N, -1, -1)
-        gt_actions_N  = get_action_smpl_torch(first_pose_N, deltas_gt.expand(N, -1, -1),
-                                              XSensConstants.upper_body_num_parts)
-        pred_actions  = get_action_smpl_torch(first_pose_N, pred_deltas,
-                                              XSensConstants.upper_body_num_parts)
-
-        skel_single = XsensSkeleton(xsens_offsets[0])
-        xyz_dist, _, leaf_xyz, _ = _compute_part_distance_matrices(
-            pred_actions[:, -1], gt_actions_N[:, -1], skel_single
-        )
-        mje = xyz_dist.mean(dim=-1)                                                 # N,
-        best = int(mje.argmin().item())
-        best_mje  = float(mje[best].item())
-        best_leaf = float(leaf_xyz[best].item())
-
-        best_pred_deltas = pred_deltas[best:best + 1]                               # 1, T, 48
-
-        # --- save inputs ---
-        save_image(obs_images[0], os.path.join(task_dir, "context_frames.png"),
-                   nrow=obs_images.shape[1])
-        save_image(goal_obs[0],     os.path.join(task_dir, "goal_obs.png"))
-        save_image(goal_image[0],   os.path.join(task_dir, "goal_image.png"))
-        save_image(goal_image_wp[0], os.path.join(task_dir, "goal_image_waypoints.png"))
-
-        # --- skinned overlays for predicted + GT trajectories ---
         curr_obs_img = obs_images[0, -1]                                            # 3, H, W
         T_steps = deltas_gt.shape[1]
 
@@ -273,21 +229,22 @@ def main(args):
                 show_text=not args.no_skeleton_text,
             )
 
-        pred_top_skin   = _render(best_pred_deltas, 'both',     0.9)
-        pred_top_noskin = _render(best_pred_deltas, 'skeleton', 0.0)
-        gt_top_skin     = _render(deltas_gt,        'both',     0.9)
-        gt_top_noskin   = _render(deltas_gt,        'skeleton', 0.0)
+        # --- task-invariant renders + saves (don't depend on policy seed) ---
+        gt_top_skin   = _render(deltas_gt, 'both',     0.9)
+        gt_top_noskin = _render(deltas_gt, 'skeleton', 0.0)
 
-        save_action_obs_sequence_viz(
-            save_path=os.path.join(task_dir, "pred_rollout_skin.png"),
-            goal_image=goal_image_wp[0], curr_obs=curr_obs_img, goal_obs=goal_obs[0],
-            top_seq=pred_top_skin, bot_seq=gt_frames[0],
-        )
-        save_action_obs_sequence_viz(
-            save_path=os.path.join(task_dir, "pred_rollout_noskin.png"),
-            goal_image=goal_image_wp[0], curr_obs=curr_obs_img, goal_obs=goal_obs[0],
-            top_seq=pred_top_noskin, bot_seq=gt_frames[0],
-        )
+        save_image(obs_images[0], os.path.join(task_dir, "context_frames.png"),
+                   nrow=obs_images.shape[1])
+        save_image(goal_obs[0],      os.path.join(task_dir, "goal_obs.png"))
+        save_image(goal_image[0],    os.path.join(task_dir, "goal_image.png"))
+        save_image(goal_image_wp[0], os.path.join(task_dir, "goal_image_waypoints.png"))
+
+        # curr_obs + GT goal-pose mesh (no skeleton) + leaf waypoints
+        gt_top_mesh_only = _render(deltas_gt, 'skin', 0.9)
+        goal_image_wp_mesh = draw_waypoints(gt_top_mesh_only[-1:], leaf_wp)  # 1, 3, H, W
+        save_image(goal_image_wp_mesh[0],
+                   os.path.join(task_dir, "goal_image_waypoints_mesh.png"))
+
         save_action_obs_sequence_viz(
             save_path=os.path.join(task_dir, "gt_rollout_skin.png"),
             goal_image=goal_image_wp[0], curr_obs=curr_obs_img, goal_obs=goal_obs[0],
@@ -299,57 +256,111 @@ def main(args):
             top_seq=gt_top_noskin, bot_seq=gt_frames[0],
         )
 
-        # --- Optional: PEVA world-model rollout of the best action sequence ---
-        wm_frames = None
-        if args.use_peva:
-            peva_ctx_size   = peva_config["context_size"]
-            peva_latent_size = image_size // 8
-            peva_curr_obs = obs_images[:, -peva_ctx_size:]                          # 1, peva_ctx, 3, H, W
-            with torch.no_grad():
-                wm_frames, _ = peva_sample(
-                    peva_model, peva_diffusion, peva_vae, peva_stats,
-                    peva_curr_obs, best_pred_deltas,
-                    peva_ctx_size, peva_latent_size,
-                    image_size, device,
-                )                                                                   # 1, T, 3, H, W
+        # --- policy sampling: N samples in parallel, keep top-K by MJE ---
+        N = args.num_eval_samples
+        K = min(args.top_k, N)
+        policy_obs_1 = imagenet_norm(
+            obs_images[:, -policy_ctx - 1:].flatten(0, 1)
+        ).unflatten(0, (1, policy_ctx + 1))                                         # 1, ctx+1, 3, H, W
+        goal_for_policy_1 = imagenet_norm(goal_image_wp)                            # 1, 3, H, W
+        ctx_poses_1 = context_poses[:, -policy_ctx - 1:]                            # 1, ctx+1, 48
+        policy_obs_N = policy_obs_1.expand(N, -1, -1, -1, -1)
+        goal_N       = goal_for_policy_1.expand(N, -1, -1, -1)
+        ctx_poses_N  = ctx_poses_1.expand(N, -1, -1)
+
+        pred_deltas = policy_sample(
+            policy, noise_scheduler,
+            policy_obs_N, goal_N, ctx_poses_N,
+            pred_horizon, action_dim, device,
+        )                                                                           # N, T, 48
+
+        first_pose_N = first_pose.expand(N, -1, -1)
+        gt_actions_N = get_action_smpl_torch(first_pose_N, deltas_gt.expand(N, -1, -1),
+                                             XSensConstants.upper_body_num_parts)
+        pred_actions = get_action_smpl_torch(first_pose_N, pred_deltas,
+                                             XSensConstants.upper_body_num_parts)
+        skel_single = XsensSkeleton(xsens_offsets[0])
+        xyz_dist, _, leaf_xyz, _ = _compute_part_distance_matrices(
+            pred_actions[:, -1], gt_actions_N[:, -1], skel_single
+        )
+        mje = xyz_dist.mean(dim=-1)                                                 # N,
+        topk_idx = torch.topk(mje, k=K, largest=False).indices.tolist()             # ascending MJE
+
+        topk_pred_wm_skin_paths = []
+        for rank, idx in enumerate(topk_idx):
+            multi = K > 1
+            rep_dir = os.path.join(task_dir, f"top{rank:02d}") if multi else task_dir
+            os.makedirs(rep_dir, exist_ok=True)
+
+            sample_mje  = float(mje[idx].item())
+            sample_leaf = float(leaf_xyz[idx].item())
+            sample_deltas = pred_deltas[idx:idx + 1]                                # 1, T, 48
+
+            pred_top_skin   = _render(sample_deltas, 'both',     0.9)
+            pred_top_noskin = _render(sample_deltas, 'skeleton', 0.0)
+
             save_action_obs_sequence_viz(
-                save_path=os.path.join(task_dir, "pred_wm_rollout_skin.png"),
+                save_path=os.path.join(rep_dir, "pred_rollout_skin.png"),
                 goal_image=goal_image_wp[0], curr_obs=curr_obs_img, goal_obs=goal_obs[0],
-                top_seq=pred_top_skin, bot_seq=wm_frames[0],
+                top_seq=pred_top_skin, bot_seq=gt_frames[0],
             )
             save_action_obs_sequence_viz(
-                save_path=os.path.join(task_dir, "pred_wm_rollout_noskin.png"),
+                save_path=os.path.join(rep_dir, "pred_rollout_noskin.png"),
                 goal_image=goal_image_wp[0], curr_obs=curr_obs_img, goal_obs=goal_obs[0],
-                top_seq=pred_top_noskin, bot_seq=wm_frames[0],
+                top_seq=pred_top_noskin, bot_seq=gt_frames[0],
             )
-            for t in range(wm_frames.shape[1]):
-                save_image(wm_frames[0, t].cpu(),
-                           os.path.join(task_dir, f"wm_frame_t{t:02d}.png"))
 
-        torch.save({
-            "track": track, "start_index": start_index, "goal_index": goal_index,
-            "first_pose": first_pose[0].cpu(),
-            "context_poses": context_poses[0].cpu(),
-            "deltas_gt": deltas_gt[0].cpu(),
-            "pred_deltas_best": best_pred_deltas[0].cpu(),
-            "pred_deltas_all": pred_deltas.cpu(),
-            "goal_image_coords": goal_image_coords[0].cpu(),
-            "best_mje": best_mje,
-            "best_leaf_xyz": best_leaf,
-            "best_idx": best,
-            "mje_all": mje.cpu(),
-        }, os.path.join(task_dir, "task_data.pth"))
+            if args.use_peva:
+                peva_ctx_size    = peva_config["context_size"]
+                peva_latent_size = image_size // 8
+                peva_curr_obs = obs_images[:, -peva_ctx_size:]                      # 1, peva_ctx, 3, H, W
+                with torch.no_grad():
+                    wm_frames, _ = peva_sample(
+                        peva_model, peva_diffusion, peva_vae, peva_stats,
+                        peva_curr_obs, sample_deltas,
+                        peva_ctx_size, peva_latent_size,
+                        image_size, device,
+                    )                                                               # 1, T, 3, H, W
+                save_action_obs_sequence_viz(
+                    save_path=os.path.join(rep_dir, "pred_wm_rollout_skin.png"),
+                    goal_image=goal_image_wp[0], curr_obs=curr_obs_img, goal_obs=goal_obs[0],
+                    top_seq=pred_top_skin, bot_seq=wm_frames[0],
+                )
+                save_action_obs_sequence_viz(
+                    save_path=os.path.join(rep_dir, "pred_wm_rollout_noskin.png"),
+                    goal_image=goal_image_wp[0], curr_obs=curr_obs_img, goal_obs=goal_obs[0],
+                    top_seq=pred_top_noskin, bot_seq=wm_frames[0],
+                )
+                for t in range(wm_frames.shape[1]):
+                    save_image(wm_frames[0, t].cpu(),
+                               os.path.join(rep_dir, f"wm_frame_t{t:02d}.png"))
+                topk_pred_wm_skin_paths.append(os.path.join(rep_dir, "pred_wm_rollout_skin.png"))
 
-        with open(os.path.join(task_dir, "metrics.txt"), "w") as f:
-            f.write(f"best_mje:      {best_mje:.4f}\n")
-            f.write(f"best_leaf_xyz: {best_leaf:.4f}\n")
-            f.write(f"best_idx:      {best}\n")
+            torch.save({
+                "track": track, "start_index": start_index, "goal_index": goal_index,
+                "rank": rank, "sample_idx": idx,
+                "first_pose": first_pose[0].cpu(),
+                "context_poses": context_poses[0].cpu(),
+                "deltas_gt": deltas_gt[0].cpu(),
+                "pred_deltas_topk": sample_deltas[0].cpu(),
+                "pred_deltas_all": pred_deltas.cpu(),
+                "goal_image_coords": goal_image_coords[0].cpu(),
+                "sample_mje": sample_mje,
+                "sample_leaf_xyz": sample_leaf,
+                "topk_idx": topk_idx,
+                "mje_all": mje.cpu(),
+            }, os.path.join(rep_dir, "task_data.pth"))
 
-        # Low-res stacked preview in log_dir for quick browsing: GT-skin over pred-wm-skin
-        if args.use_peva:
+            with open(os.path.join(rep_dir, "metrics.txt"), "w") as f:
+                f.write(f"rank:            {rank}\n")
+                f.write(f"sample_idx:      {idx}\n")
+                f.write(f"sample_mje:      {sample_mje:.4f}\n")
+                f.write(f"sample_leaf_xyz: {sample_leaf:.4f}\n")
+
+        # Low-res stacked preview: GT-skin on top, then top-K pred-wm-skin (best→worst).
+        if args.use_peva and topk_pred_wm_skin_paths:
             _save_stacked_preview(
-                [os.path.join(task_dir, "gt_rollout_skin.png"),
-                 os.path.join(task_dir, "pred_wm_rollout_skin.png")],
+                [os.path.join(task_dir, "gt_rollout_skin.png"), *topk_pred_wm_skin_paths],
                 os.path.join(log_dir, f"{task_name}__preview.png"),
                 max_height=args.preview_max_height,
             )
@@ -367,7 +378,11 @@ if __name__ == "__main__":
     parser.add_argument("--nomad_checkpoint", type=str, default=None)
 
     parser.add_argument("-N", "--num_eval_samples", type=int, default=64,
-                        help="Number of policy samples; best (min leaf-xyz) is kept")
+                        help="Number of policy samples drawn in parallel per task")
+    parser.add_argument("-K", "--top_k", type=int, default=1,
+                        help="Save the top-K samples (lowest MJE) per task. "
+                             "K>1 puts each sample in task_dir/top{NN}/ (rank 00 = best); "
+                             "previews stack GT on top followed by all K pred_wm_rollout_skins.")
 
     # keep the same dataset knobs as plan_cem.py
     parser.add_argument("--peva_context_size", type=int, default=7,
