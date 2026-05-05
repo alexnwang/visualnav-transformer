@@ -408,8 +408,15 @@ class ViNT_Nymeria_Dataset(Dataset):
         )
 
         # always return goal_image_coords
-        target_idx = goal_time - curr_time + (curr_traj_data["image_projection_matrix"].shape[1] // 2)
-        image_coords = curr_traj_data["image_projection_matrix"][curr_time, target_idx, :] # K, 2
+        ipm = curr_traj_data["image_projection_matrix"]
+        if ipm.ndim == 4:
+            # old (full) layout (T, 65, K, 2): pick the row for this sample's goal offset
+            target_idx = goal_time - curr_time + (ipm.shape[1] // 2)
+            image_coords = ipm[curr_time, target_idx, :]  # K, 2
+        else:
+            # lite layout (T, K, 2): the chosen offset is baked in at conversion time
+            target_idx = 0  # only used by the old-layout depth_matrix branch below
+            image_coords = ipm[curr_time, :]  # K, 2
         
         # Swap x and y, and invert the new y axis
         rotated_image_coords = torch.empty_like(image_coords)
@@ -503,12 +510,18 @@ class ViNT_Nymeria_Dataset(Dataset):
         return ret_dict
 
     def _get_trajectory(self, trajectory_name):
-        traj_data = torch.load(os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'), weights_only=False)
-        del traj_data['xsens_xyz']
-        del traj_data['xsens_eulerxyz']
-        for k, v in traj_data.items():
-            traj_data[k] = v.to(torch.float32)
-        return traj_data
+        d = torch.load(
+            os.path.join(self.data_folder, trajectory_name, 'ep_info.pt'),
+            weights_only=False,
+            mmap=True,
+        )
+        # Back-compat for runs pointing at the old (full) ep_info layout.
+        # Old all_parts is (T, 23, 2, 7); the lite layout is (T, 15, 7). Expose a (T, K, 7) view
+        # so downstream `[:, :self.num_segments, ...]` indexing is uniform across both.
+        if d['all_parts'].ndim == 4:
+            d = dict(d)
+            d['all_parts'] = d['all_parts'][:, :, 0, :]
+        return d
     
     def _compute_actions_nymeria_smpl(self, traj_data, curr_time, goal_time):
         start_index = curr_time
@@ -516,11 +529,11 @@ class ViNT_Nymeria_Dataset(Dataset):
         goal_time = [min(goal_time, len(traj_data['all_parts']) - 1)]
         
         # absolute xyz and rpy
-        actions_xyz = traj_data['all_parts'][start_index:end_index, :self.num_segments, 0, 4:]
-        actions_quat = traj_data['all_parts'][start_index:end_index, :self.num_segments, 0, :4]
-        goals_xyz = traj_data['all_parts'][goal_time, :self.num_segments, 0, 4:]
-        goals_quat = traj_data['all_parts'][goal_time, :self.num_segments, 0, :4]
-        
+        actions_xyz = traj_data['all_parts'][start_index:end_index, :self.num_segments, 4:]
+        actions_quat = traj_data['all_parts'][start_index:end_index, :self.num_segments, :4]
+        goals_xyz = traj_data['all_parts'][goal_time, :self.num_segments, 4:]
+        goals_quat = traj_data['all_parts'][goal_time, :self.num_segments, :4]
+
         actions_T = actions_xyz.shape[0] # Could be shorter than self.len_traj_pred
         start_xyz = actions_xyz[0].view(1, self.num_segments, 3) # relative to each segment
         
@@ -562,13 +575,13 @@ class ViNT_Nymeria_Dataset(Dataset):
         end_index = curr_time + self.len_traj_pred + 1
         goal_time = [min(goal_time, len(traj_data['all_parts']) - 1)]
                 
-        actions_xyz = traj_data['all_parts'][start_index:end_index, :self.num_segments, 0, 4:]
-        actions_quat = traj_data['all_parts'][start_index:end_index, :self.num_segments, 0, :4]
-        goals_xyz = traj_data['all_parts'][goal_time, :self.num_segments, 0, 4:]
-        goals_quat = traj_data['all_parts'][goal_time, :self.num_segments, 0, :4]
-        
+        actions_xyz = traj_data['all_parts'][start_index:end_index, :self.num_segments, 4:]
+        actions_quat = traj_data['all_parts'][start_index:end_index, :self.num_segments, :4]
+        goals_xyz = traj_data['all_parts'][goal_time, :self.num_segments, 4:]
+        goals_quat = traj_data['all_parts'][goal_time, :self.num_segments, :4]
+
         actions_T = actions_xyz.shape[0] # Could be shorter than self.len_traj_pred
-        
+
         start_xyz = actions_xyz[0, :1].view(1, 1, 3) # relative to first pelvis
         start_quat = actions_quat[0, :1].view(1, 1, 4) # relative to first pelvis
         

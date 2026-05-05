@@ -187,6 +187,8 @@ def main(rank, world_size, config):
         num_workers=config["num_workers"],
         drop_last=False,
         persistent_workers=True if config["num_workers"] > 0 else False,
+        pin_memory=True,
+        # prefetch_factor=4,
     )
 
     if "eval_batch_size" not in config:
@@ -434,7 +436,28 @@ if __name__ == "__main__":
         user_config = yaml.safe_load(f)
 
     config.update(user_config)
+
+    for global_key, per_gpu_key in [
+        ("global_batch_size", "batch_size"),
+        ("global_eval_batch_size", "eval_batch_size"),
+    ]:
+        if global_key in user_config and per_gpu_key in user_config:
+            raise ValueError(
+                f"{global_key} and {per_gpu_key} are mutually exclusive in {args.config}"
+            )
+
     world_size, rank, gpu, _ = init_distributed()
+
+    for global_key, per_gpu_key in [
+        ("global_batch_size", "batch_size"),
+        ("global_eval_batch_size", "eval_batch_size"),
+    ]:
+        if global_key in user_config:
+            if config[global_key] % world_size != 0:
+                raise ValueError(
+                    f"{global_key}={config[global_key]} is not divisible by world_size={world_size}"
+                )
+            config[per_gpu_key] = config[global_key] // world_size
 
     # config["run_name"] += "_" + time.strftime("%Y_%m_%d_%H_%M_%S")
     # for ddp cannot use seconds.
