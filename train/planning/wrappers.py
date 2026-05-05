@@ -438,7 +438,7 @@ class EvaluatorPeva(PevaWM):
         init_xyz_dist_matrix, _, leaf_xyz_init, _ = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
         intermediate_xyz_init = init_xyz_dist_matrix[:, XSensConstants.intermediate_indices].mean(dim=-1)
         all_xyz_init = init_xyz_dist_matrix.mean(dim=-1)
-        num_joints_visible = (goal_image_coords[:, XSensConstants.leaf_indices] != -1).all(dim=-1).float().sum(dim=-1)
+        num_leafs_visible = (goal_image_coords[:, XSensConstants.leaf_indices] != -1).all(dim=-1).float().sum(dim=-1)
 
         with torch.no_grad():
             mu_state = self.rollout(state_0=state_0, act=mu)
@@ -448,7 +448,7 @@ class EvaluatorPeva(PevaWM):
             "leaf_xyz_init": leaf_xyz_init.mean().item(),
             "intermediate_xyz_init": intermediate_xyz_init.mean().item(),
             "all_xyz_init": all_xyz_init.mean().item(),
-            "num_joints_visible": num_joints_visible.mean().item(),
+            "num_leafs_visible": num_leafs_visible.mean().item(),
             "dreamsim_init": mu_loss[0].item(),
         }, {}, {}
 
@@ -524,7 +524,7 @@ class EvaluatorWaypoint(WaypointWM):
         first_pose = state_g["first_pose"]  # B, 1, 48
 
         B = curr_obs.shape[0]
-        num_joints_visible = (goal_image_coords[:, XSensConstants.leaf_indices] != -1).all(dim=-1).float().sum(dim=-1)
+        num_leafs_visible = (goal_image_coords[:, XSensConstants.leaf_indices] != -1).all(dim=-1).float().sum(dim=-1)
 
         gt_actions = get_action_smpl_torch(first_pose, deltas_gt, XSensConstants.upper_body_num_parts)
         init_xyz_dist_matrix, _, leaf_xyz_init, _ = _compute_part_distance_matrices(first_pose[:, -1], gt_actions[:, -1], skel)
@@ -541,7 +541,7 @@ class EvaluatorWaypoint(WaypointWM):
             "leaf_xyz_init": leaf_xyz_init.mean().item(),
             "intermediate_xyz_init": intermediate_xyz_init.mean().item(),
             "all_xyz_init": all_xyz_init.mean().item(),
-            "num_joints_visible": num_joints_visible.mean().item(),
+            "num_leafs_visible": num_leafs_visible.mean().item(),
             "dreamsim_init": mu_loss[0].item(),
         }
 
