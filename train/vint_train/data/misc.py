@@ -272,3 +272,6 @@ class XSensConstants:
         12,
         13
     ]
+
+DEFAULT_GOAL_BODY_PARTS = ["Pelvis", "Head", "R_Hand", "L_Hand"]
+GOAL_BODY_PART_COLORS = {"Pelvis": "red", "Head": "green", "R_Hand": "blue", "L_Hand": "yellow"}

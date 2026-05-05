@@ -99,6 +99,15 @@ def main(rank, world_size, config):
         # cudnn.deterministic = True
 
     cudnn.benchmark = True  # good if input sizes don't vary
+
+    if config.get("num_workers", None) is None:
+        try:
+            total_cpus = len(os.sched_getaffinity(0))
+        except AttributeError:
+            total_cpus = os.cpu_count() or 1
+        config["num_workers"] = max(1, total_cpus // max(1, world_size))
+        if rank == 0:
+            print(f"num_workers auto-resolved to {config['num_workers']} (total_cpus={total_cpus}, world_size={world_size})")
     transform = ([
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -146,6 +155,7 @@ def main(rank, world_size, config):
                     normalize=config["normalize"],
                     gaussian_normalization_stats_path=data_config["gaussian_normalization_stats_path"],
                     waypoint_mask_prob=config.get('waypoint_mask_prob', None) if data_split_type == "train" else None,
+                    goal_body_parts=config.get('goal_body_parts', None),
                 )
                 
                 if data_config.get("repeat", 1) > 1:

@@ -23,7 +23,7 @@ from vint_train.data.data_utils import (
     to_local_coords,
     to_local_coords_3d
 )
-from vint_train.data.misc import XSensConstants, XsensSkeleton
+from vint_train.data.misc import XSensConstants, XsensSkeleton, DEFAULT_GOAL_BODY_PARTS, GOAL_BODY_PART_COLORS
 from vint_train.training.nymeria_training_utils import forward_kinematics_wrapper, get_action_smpl_torch, get_delta_smpl, normalize_data_smpl_pose, normalize_data_smpl_pose_gaussian, set_gaussian_stats
 
 class ViNT_Nymeria_Dataset(Dataset):
@@ -50,6 +50,7 @@ class ViNT_Nymeria_Dataset(Dataset):
         normalize: bool = True,
         obs_type: str = "png",
         waypoint_mask_prob: Optional[str] = None,
+        goal_body_parts: Optional[List[str]] = None,
     ):
         """
         Main ViNT dataset class
@@ -85,6 +86,10 @@ class ViNT_Nymeria_Dataset(Dataset):
         self.traj_len_key = "all_parts"
         self.goal_type = goal_type
         assert self.goal_type in {None, "2d", "point", "2d5050", "draw", "3d5050"}, "goal_format must be one of 2d, point, or 2d5050"
+        self.goal_body_parts = goal_body_parts if goal_body_parts is not None else list(DEFAULT_GOAL_BODY_PARTS)
+        assert all(p in DEFAULT_GOAL_BODY_PARTS for p in self.goal_body_parts), \
+            f"goal_body_parts must be a subset of {DEFAULT_GOAL_BODY_PARTS}, got {self.goal_body_parts}"
+        assert len(self.goal_body_parts) > 0, "goal_body_parts must be non-empty"
         
         traj_names_file = os.path.join(data_split_folder, "traj_names.txt")
         with open(traj_names_file, "r") as f:
@@ -449,34 +454,50 @@ class ViNT_Nymeria_Dataset(Dataset):
             ret_dict["goal_pose_xyz"] = torch.as_tensor(goal_xyz, dtype=torch.float32)
             ret_dict['xsens_offsets'] = torch.as_tensor(xsens_offsets, dtype=torch.float32)
         
-        if self.goal_type in ["3d5050"]: 
+        if self.goal_type in ["3d5050"]:
             ret_dict["goal_pose_depth"] = torch.as_tensor(curr_traj_data["depth_matrix"][curr_time, target_idx, :], dtype=torch.float32) # P
-                
-        # if providing waypoint information, and waypoint_masking is not None, then mask the goal_image_coords. 
+
+        # Force any leaf parts not in self.goal_body_parts to be invisible (-1) so the
+        # encoder/renderer treats them as masked. The same -1 sentinel that waypoint_masking
+        # already relies on.
+        if self.goal_type in ["2d", "2d5050", "draw", "3d5050"]:
+            for p in DEFAULT_GOAL_BODY_PARTS:
+                if p not in self.goal_body_parts:
+                    pi = XSensConstants.part_names.index(p)
+                    ret_dict["goal_image_coords"][pi] = torch.tensor([-1, -1])
+                    if self.goal_type == "3d5050":
+                        ret_dict["goal_pose_depth"][pi] = -1.
+            image_coords = ret_dict["goal_image_coords"]
+
+        # if providing waypoint information, and waypoint_masking is not None, then mask the goal_image_coords.
         if self.goal_type in ["2d", "2d5050", "draw", "3d5050"]:
             if self.waypoint_mask_prob == "uniform":
                 if torch.rand(1) < 0.5:
-                    num_mask = np.random.randint(1, 5)
-                    masked_indices = np.random.choice(4, num_mask, replace=False)
-                    for idx, part_idx in enumerate([XSensConstants.part_names.index(part_name) for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]):
+                    K = len(self.goal_body_parts)
+                    num_mask = np.random.randint(1, K + 1)
+                    masked_indices = np.random.choice(K, num_mask, replace=False)
+                    for idx, part_name in enumerate(self.goal_body_parts):
                         if idx in masked_indices:
+                            part_idx = XSensConstants.part_names.index(part_name)
                             ret_dict["goal_image_coords"][part_idx] = torch.tensor([-1, -1])
                             if self.goal_type in ["3d5050"]:
                                 ret_dict["goal_pose_depth"][part_idx] = -1.
                     image_coords = ret_dict["goal_image_coords"]
-            
+
         if self.goal_type in ["2d", "2d5050"]:
             ret_dict["goal_image_transformed"] = obs_image_transformed[-1]
             ret_dict["goal_image"] = obs_images[-1]
         elif self.goal_type == "draw":
             untransformed_current_obs = obs_images[-1]
-            key_point_image_coords = torch.stack(
-                [image_coords[XSensConstants.part_names.index(part_name)] for part_name in ["Pelvis","Head", "R_Hand", "L_Hand"]]
-            , dim=0) # 4, 2
-            for index, color in zip(range(len(key_point_image_coords)), ["red", "green", "blue", "yellow"]):
-                if all(key_point_image_coords[index] == -1): continue
-                points = key_point_image_coords[index:index+1, None, :]
-                untransformed_current_obs = draw_keypoints(untransformed_current_obs, points, colors=color, radius=4)
+            for part_name in DEFAULT_GOAL_BODY_PARTS:
+                pt = image_coords[XSensConstants.part_names.index(part_name)]
+                if (pt == -1).all(): continue
+                untransformed_current_obs = draw_keypoints(
+                    untransformed_current_obs,
+                    pt[None, None, :],
+                    colors=GOAL_BODY_PART_COLORS[part_name],
+                    radius=4,
+                )
             ret_dict["goal_image_transformed"] = self.transform(untransformed_current_obs)
             ret_dict["goal_image"] = untransformed_current_obs
         return ret_dict
