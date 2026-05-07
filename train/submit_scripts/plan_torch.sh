@@ -25,12 +25,66 @@ SLURM_HEADER="#!/bin/bash
 # singularity exec --nv --overlay /scratch/anw2067/nymeria.sqf:ro /share/apps/images/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif bash -l -c "conda activate nomad_train2 && python plan_cem_viz.py -a waypoint -n 128 -o 16 -t 8 -v 0.5 -R 32 -H 1 --peva_diffusion_steps 250 --nomad_model draw_mask --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
 
 ########################################################
+# 05/06, bench policy vs WM compute cost (one-shot wallclock + flops)
+########################################################
+
+mkdir -p /home/anw2067/slurm_logs/bench && sbatch --time=0:30:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --constraint=h100
+#SBATCH --job-name=bench-policy-vs-wm-n8-pevads64-pevactx7
+#SBATCH --output=/home/anw2067/slurm_logs/bench/bench-policy-vs-wm-%j.out
+#SBATCH --error=/home/anw2067/slurm_logs/bench/bench-policy-vs-wm-%j.err
+cd /home/anw2067/visualnav-transformer/train
+${SING} bash -l -c "conda activate nomad_train2 && python -m scripts.bench_policy_vs_wm --n 8 --peva_diffusion_steps 64 --peva_context_size 7"
+EOF
+
+########################################################
+# 05/06, waypoint_cem on bodyparts ablations (pelvis/head/hands/pelvis_hands), n8 dist8 64 tasks
+########################################################
+
+# sbatch --time=12:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-waypoint_cem-bodyparts_pelvis-o6-n8-H1-t4-v0.3-N64-ds64-dist8
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a waypoint -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model bodyparts_pelvis --rank 0 --world_size 1 --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+# EOF
+
+# sbatch --time=12:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-waypoint_cem-bodyparts_head-o6-n8-H1-t4-v0.3-N64-ds64-dist8
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a waypoint -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model bodyparts_head --rank 0 --world_size 1 --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+# EOF
+
+# sbatch --time=12:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-waypoint_cem-bodyparts_hands-o6-n8-H1-t4-v0.3-N64-ds64-dist8
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a waypoint -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model bodyparts_hands --rank 0 --world_size 1 --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+# EOF
+
+# sbatch --time=12:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-waypoint_cem-bodyparts_pelvis_hands-o6-n8-H1-t4-v0.3-N64-ds64-dist8
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a waypoint -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model bodyparts_pelvis_hands --rank 0 --world_size 1 --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+# EOF
+
+# pelvis_head training still in progress (only at ema_6 as of 05/06) — uncomment once ema_9.pth lands
+# sbatch --time=12:00:00 <<EOF
+# ${SLURM_HEADER}
+# #SBATCH --job-name=plan-waypoint_cem-bodyparts_pelvis_head-o6-n8-H1-t4-v0.3-N64-ds64-dist8
+# cd /home/anw2067/visualnav-transformer/train
+# ${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a waypoint -o 6 -H 1 -n 8 -t 4 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model bodyparts_pelvis_head --rank 0 --world_size 1 --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+# EOF
+
+########################################################
 # 04/26, rerender_cem_viz local one-liner — best mu only (MJE + WP), SRC_B + SRC_C
 ########################################################
 
-CEM_VIZ_ROOT=/scratch/anw2067/nomad-logs/cem_viz
-RERENDER_ARGS="--steps best --peva_context_size 7 --nomad_model draw_mask"
-${SING} bash -l -c "conda activate nomad_train2 && cd /home/anw2067/visualnav-transformer/train && python paper_figure_generations/rerender_cem_viz.py --source_log_dir ${CEM_VIZ_ROOT}/2026_04_18_12_49_12:viz_waypoint_cem-h1-n8-t8-v0.5-o12-R128-ds64-visds250-dist8-8:ws2-r0 --tasks 0.887_20230724_s1_justin_heath_act0_5gtnkm-s1760-g1768 0.822_20230905_s1_elizabeth_morgan_act3_smhnlg-s2794-g2802 0.609_20231122_s1_harold_copeland_act2_k1ngjh-s1758-g1766 ${RERENDER_ARGS} && python paper_figure_generations/rerender_cem_viz.py --source_log_dir ${CEM_VIZ_ROOT}/2026_04_15_13_19_52:viz_waypoint_cem-h1-n8-t8-v0.5-o12-R128-ds64-visds250-dist8-8 --tasks 0.781_20230817_s1_rebecca_ward_act2_39a7o2-s1124-g1132 ${RERENDER_ARGS}"
+# CEM_VIZ_ROOT=/scratch/anw2067/nomad-logs/cem_viz
+# RERENDER_ARGS="--steps best --peva_context_size 7 --nomad_model draw_mask"
+# ${SING} bash -l -c "conda activate nomad_train2 && cd /home/anw2067/visualnav-transformer/train && python paper_figure_generations/rerender_cem_viz.py --source_log_dir ${CEM_VIZ_ROOT}/2026_04_18_12_49_12:viz_waypoint_cem-h1-n8-t8-v0.5-o12-R128-ds64-visds250-dist8-8:ws2-r0 --tasks 0.887_20230724_s1_justin_heath_act0_5gtnkm-s1760-g1768 0.822_20230905_s1_elizabeth_morgan_act3_smhnlg-s2794-g2802 0.609_20231122_s1_harold_copeland_act2_k1ngjh-s1758-g1766 ${RERENDER_ARGS} && python paper_figure_generations/rerender_cem_viz.py --source_log_dir ${CEM_VIZ_ROOT}/2026_04_15_13_19_52:viz_waypoint_cem-h1-n8-t8-v0.5-o12-R128-ds64-visds250-dist8-8 --tasks 0.781_20230817_s1_rebecca_ward_act2_39a7o2-s1124-g1132 ${RERENDER_ARGS}"
 
 ########################################################
 # 04/26, rerender_cem_viz across three existing waypoint runs (draw_mask, ctx6) — sbatch

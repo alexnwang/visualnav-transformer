@@ -325,7 +325,27 @@ MODEL_DIRECTORY={
     "draw_mask_heldout": (
         "/home/anw2067/visualnav-transformer/train/config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-heldoutEnvs.yaml",
         "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_03_22_01_13:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask/ema_9.pth"
-    )
+    ),
+    "bodyparts_pelvis": (
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_05_17_49:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_pelvis/config.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_05_17_49:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_pelvis/ema_9.pth"
+    ),
+    "bodyparts_head": (
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_05_17_55:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_head/config.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_05_17_55:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_head/ema_9.pth"
+    ),
+    "bodyparts_hands": (
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_05_18_02:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_hands/config.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_05_18_02:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_hands/ema_9.pth"
+    ),
+    "bodyparts_pelvis_hands": (
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_05_19_05:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_pelvis_hands/config.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_05_19_05:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_pelvis_hands/ema_9.pth"
+    ),
+    "bodyparts_pelvis_head": (
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_06_02_52:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_pelvis_head/config.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_06_02_52:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_pelvis_head/ema_9.pth"
+    ),
 }
         
 if __name__ == "__main__":
