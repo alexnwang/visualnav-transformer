@@ -121,6 +121,12 @@ def preprocess_track(
         },
         out_path,
     )
+    # Reclaim disk: the source recording_head VRS (~600MB-2GB per track) is
+    # only needed to extract the two tensors above. Once camera_data.pt is on
+    # disk we don't need the raw VRS again. Each worker handles its own track
+    # so this doesn't race with others. Idempotency comes from the
+    # skip-on-existing check at the top of preprocess_track.
+    shutil.rmtree(recording_head_dir, ignore_errors=True)
     print(f"[done] {track} — {T} timesteps → {out_path}")
     return True
 
