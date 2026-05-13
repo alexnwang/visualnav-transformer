@@ -36,10 +36,10 @@ def build_peva_cem(args, wandb_run, log_dir, device):
     model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device=device,
                                                                 inference_context_size=args.peva_context_size,
                                                                 diffusion_steps=args.peva_diffusion_steps)
-    
+
     # construct wrappers and CEM planner
     wm_wrapper = PevaWM(model, peva_diffusion, vae, peva_stats,
-                        nomad_config["image_size"][0], peva_config["context_size"])   
+                        nomad_config["image_size"][0], peva_config["context_size"])
     evaluator = EvaluatorPeva(model, peva_diffusion, vae, peva_stats,
                     nomad_config["image_size"][0], peva_config["context_size"],
                     num_eval_samples=args.num_eval_samples)
@@ -66,7 +66,7 @@ def build_waypoint_cem(args, wandb_run, log_dir, device):
     model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device=device,
                                                                 inference_context_size=args.peva_context_size,
                                                                 diffusion_steps=args.peva_diffusion_steps)
-    
+
     # construct wrappers and CEM planner
     wm_wrapper = WaypointWM(model, peva_diffusion, vae, peva_stats, policy, policy_diffusion,
                 nomad_config["image_size"][0], peva_config["context_size"], nomad_config["context_size"]+1,
@@ -79,12 +79,12 @@ def build_waypoint_cem(args, wandb_run, log_dir, device):
                     waypoint_mode=args.algo)
     objective_fn = ObjectiveDreamSIM(pred_horizon=nomad_config["len_traj_pred"], device=device, return_metric=args.use_leafxyz_as_cost)
     preprocessor = Preprocessor()
-    
+
     if args.algo == "waypoint":
         action_dim = 8
     elif args.algo == "waypoint_point3d":
         action_dim = 12
-    
+
     cem_planner = CEMPlanner(
         horizon=args.horizon,
         topk=args.topk,
@@ -97,7 +97,7 @@ def build_waypoint_cem(args, wandb_run, log_dir, device):
         preprocessor=preprocessor,
         evaluator=evaluator,
         wandb_run=wandb_run,
-        log_dir=log_dir
+        log_dir=log_dir,
     )
     return cem_planner, nomad_config, peva_config
 
@@ -142,7 +142,7 @@ def main(args):
     
     # load models
     device = 'cuda'
-    if algo in "waypoint": 
+    if algo in "waypoint":
         action_init = torch.ones(1, args.horizon, 8) * 0.5
         cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir, device)
     elif algo == "waypoint_point3d":
@@ -157,6 +157,8 @@ def main(args):
         
     # prepare dataset
     data_config = nomad_config["datasets"]["nymeria"]
+    if args.data_folder is not None:
+        data_config["data_folder"] = args.data_folder
     context_size = max(args.peva_context_size - 1, nomad_config["context_size"])
     tasks_file = build_planning_split(
         data_folder=data_config["data_folder"],
@@ -346,6 +348,10 @@ MODEL_DIRECTORY={
         "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_06_02_52:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_pelvis_head/config.yaml",
         "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_06_02_52:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_pelvis_head/ema_9.pth"
     ),
+    "bodyparts_head_hands": (
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_07_02_51:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_head_hands/config.yaml",
+        "/home/anw2067/visualnav-transformer/train/logs/nomad-minimal/2026_05_07_02_51:nomad-minimal-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_head_hands/ema_9.pth"
+    ),
 }
         
 if __name__ == "__main__":
@@ -376,6 +382,9 @@ if __name__ == "__main__":
                         default="/home/anw2067/scratch/nymeria_visibility_matrix",
                         help="Root directory containing per-track camera_data.pt files. "
                              "If not provided, skeleton overlays are skipped.")
+    parser.add_argument("--data_folder", type=str, default="/scratch/anw2067/nymeria_visibility_matrix",
+                        help="Override data_folder from the nomad config (e.g. point planning at the full "
+                             "ep_info.pt instead of the lite/dist8 repack).")
     
     parser.add_argument("--peva_config", type=str, default="/home/anw2067/visualnav-transformer/train/peva/config/nymeria_rel_concat_embedding_compile_beta095_ar_model_context_16_bs_16_smpl_lowebody_-64to_64_1_goal_emb_relative_xxl.yaml")
     parser.add_argument("--peva_checkpoint", type=str, default="/scratch/anw2067/nymeria_rel_concat_embedding_compile_beta095_ar_model_context_16_bs_16_smpl_lowebody_cancel_scaler_-64to_64_xxl_280_0180000.pth.tar")
