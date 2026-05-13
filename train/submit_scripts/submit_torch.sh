@@ -41,6 +41,8 @@ EOF
 }
 
 # gpu_type  num_gpus  cpus  mem_gb
+# Race-tag across L40S / A100 / H100 -- first to start cancels the pending siblings.
+# A100 / H100 are single-GPU (smaller resource ask = faster queue priority).
 submit_one l40s 4 64 400
-submit_one a100 4 64 400
-submit_one h100 2 40 400
+submit_one a100 1 16 120
+submit_one h100 1 16 120

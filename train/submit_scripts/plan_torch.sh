@@ -25,6 +25,30 @@ SLURM_HEADER="#!/bin/bash
 # singularity exec --nv --overlay /scratch/anw2067/nymeria.sqf:ro /share/apps/images/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif bash -l -c "conda activate nomad_train2 && python plan_cem_viz.py -a waypoint -n 128 -o 16 -t 8 -v 0.5 -R 32 -H 1 --peva_diffusion_steps 250 --nomad_model draw_mask --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
 
 ########################################################
+# 2026-05-09, retrieval baseline — build privileged KNN index over train, dist8, H=8
+########################################################
+
+mkdir -p /home/anw2067/slurm_logs/retrieval_index && sbatch --time=4:00:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=build_cheat_index-h8-stride4
+#SBATCH --output=/home/anw2067/slurm_logs/retrieval_index/build-%j.out
+#SBATCH --error=/home/anw2067/slurm_logs/retrieval_index/build-%j.err
+cd /home/anw2067/visualnav-transformer/train
+${SING} bash -l -c "conda activate nomad_train2 && python -m scripts.build_retrieval_index --horizon 8 --stride 4 --traj_names_file /home/anw2067/visualnav-transformer/train/data_splits/nymeria/train/traj_names.txt --data_folder /scratch/anw2067/nymeria_visibility_matrix --output /scratch/anw2067/retrieval_index/cheat_h8_stride4.pt"
+EOF
+
+########################################################
+# 2026-05-09, retrieval baseline — privileged KNN top-1 + MJE, dist8, 64 tasks (CPU)
+########################################################
+
+sbatch --time=00:30:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=plan-retrieval-cheat-dist8
+cd /home/anw2067/visualnav-transformer/train
+${SING} bash -l -c "conda activate nomad_train2 && python plan_retrieval.py --retrieval_index_path /scratch/anw2067/retrieval_index/cheat_h8_stride4.pt -H 8 --num_samples_to_plan 128 --shuffle --min_dist_cat 8 --max_dist_cat 8"
+EOF
+
+########################################################
 # 05/08, waypoint MPPI baseline on draw_mask, n8 dist8 64 tasks (lam=1.0, sigma=weighted)
 ########################################################
 
