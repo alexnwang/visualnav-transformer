@@ -42,6 +42,7 @@ class CEMPlanner(BasePlanner):
         evaluator,
         wandb_run,
         log_dir="logs/cem",
+        action_pca=None,
         **kwargs,
     ):
         """
@@ -77,7 +78,7 @@ class CEMPlanner(BasePlanner):
         self.opt_steps = opt_steps
 
         os.makedirs(log_dir, exist_ok=True)
-        
+
         self.accum_metrics = defaultdict(list)
 
         self.accum_objective_metric_dicts = {}
@@ -85,12 +86,67 @@ class CEMPlanner(BasePlanner):
         self.accum_eval_other_vals = {}
         self.accum_task_dicts = {}
 
+        # PCA sampling prior. When set, CEM samples in K-dim z-space and
+        # projects to (horizon, action_dim) before WM rollout.
+        # Expected keys: components (K, horizon*action_dim), mean (horizon*action_dim,),
+        # explained_variance (K,). All as torch.Tensor on CPU; moved to self.device lazily.
+        self.action_pca = action_pca
+        if self.action_pca is not None:
+            comp = self.action_pca["components"]
+            mean = self.action_pca["mean"]
+            ev = self.action_pca["explained_variance"]
+            assert comp.ndim == 2 and comp.shape[1] == horizon * action_dim, \
+                f"PCA components must be (K, H*D)={horizon*action_dim}, got {tuple(comp.shape)}"
+            assert mean.shape == (horizon * action_dim,), \
+                f"PCA mean must be (H*D,)={horizon*action_dim}, got {tuple(mean.shape)}"
+            assert ev.shape == (comp.shape[0],), \
+                f"PCA explained_variance must be (K,)={comp.shape[0]}, got {tuple(ev.shape)}"
+            self.K = comp.shape[0]
+            print(f"[CEMPlanner] PCA active: K={self.K}, "
+                  f"cum_var_ratio={float(self.action_pca.get('explained_variance_ratio', ev/ev.sum()).sum()):.4f}")
+
+    def _z_to_action(self, z):
+        """z: (B, K) -> action: (B, H, D). Add PCA mean."""
+        comp = self.action_pca["components"].to(z.device, z.dtype)
+        mean = self.action_pca["mean"].to(z.device, z.dtype)
+        flat = z @ comp + mean.unsqueeze(0)            # (B, H*D)
+        return flat.view(-1, self.horizon, self.action_dim)
+
+    def _action_to_z(self, action):
+        """action: (B, H, D) -> z: (B, K). Inverse via orthonormal components^T."""
+        comp = self.action_pca["components"].to(action.device, action.dtype)
+        mean = self.action_pca["mean"].to(action.device, action.dtype)
+        flat = action.reshape(action.shape[0], -1) - mean.unsqueeze(0)  # (B, H*D)
+        return flat @ comp.t()                                            # (B, K)
+
     def init_mu_sigma(self, obs_0, actions=None):
         """
         actions: (B, T, action_dim) torch.Tensor, T <= self.horizon
         mu, sigma could depend on current obs, but obs_0 is only used for providing n_evals for now
+
+        With PCA active, mu and sigma are returned in z-space:
+            mu:    (n_evals, K)
+            sigma: (n_evals, K), per-component = var_scale * sqrt(explained_variance)
+        Otherwise (default) shapes are (n_evals, horizon, action_dim).
         """
         n_evals = obs_0["images"].shape[0]
+        if self.action_pca is not None:
+            ev = self.action_pca["explained_variance"]
+            sigma = self.var_scale * torch.sqrt(ev).unsqueeze(0).expand(n_evals, -1).clone()  # (n_evals, K)
+            if actions is None:
+                mu = torch.zeros(n_evals, self.K)
+            else:
+                # Pad-then-project any partial warm-start.
+                t = actions.shape[1]
+                remaining_t = self.horizon - t
+                if remaining_t > 0:
+                    actions = torch.cat(
+                        [actions, torch.zeros(n_evals, remaining_t, self.action_dim, device=actions.device)],
+                        dim=1,
+                    )
+                mu = self._action_to_z(actions.to(sigma.device))
+            return mu, sigma
+
         sigma = self.var_scale * torch.ones([n_evals, self.horizon, self.action_dim])
         if actions is None:
             mu = torch.zeros(n_evals, 0, self.action_dim)
@@ -174,7 +230,8 @@ class CEMPlanner(BasePlanner):
         self.accum_eval_other_vals[task_name] = defaultdict(list)
 
         if self.evaluator is not None:
-            task_metrics, gtwp_metrics, nowp_metrics = self.evaluator.eval_task(trans_obs_0, z_obs_g, mu, self.objective_fn)
+            task_mu = self._z_to_action(mu) if self.action_pca is not None else mu
+            task_metrics, gtwp_metrics, nowp_metrics = self.evaluator.eval_task(trans_obs_0, z_obs_g, task_mu, self.objective_fn)
             self.accum_task_dicts[task_name] = {"task": task_metrics, "task_gtwp": gtwp_metrics, "task_nowp": nowp_metrics}
             if self.wandb_run is not None:
                 task_log = {f"task/{k}": v for k, v in task_metrics.items()}
@@ -199,12 +256,18 @@ class CEMPlanner(BasePlanner):
                 )
                 for key, arr in z_obs_g.items()
             }
-            action = (
-                torch.randn(self.num_samples, self.horizon, self.action_dim).to(
-                    self.device
-                )* sigma + mu
-            )
-            action[0] = mu  # optional: make the first one mu itself
+            if self.action_pca is not None:
+                # Sample in K-dim z-space, then project to (num_samples, H, D).
+                z = torch.randn(self.num_samples, self.K, device=self.device) * sigma + mu
+                z[0] = mu  # keep the first sample at the current mean (matches non-PCA path)
+                action = self._z_to_action(z)
+            else:
+                action = (
+                    torch.randn(self.num_samples, self.horizon, self.action_dim).to(
+                        self.device
+                    )* sigma + mu
+                )
+                action[0] = mu  # optional: make the first one mu itself
             with torch.no_grad():
                 i_state = self.wm.rollout(
                     state_0=curr_state_0,
@@ -218,8 +281,14 @@ class CEMPlanner(BasePlanner):
             topk_idx = torch.argsort(loss)[: self.topk]
             topk_action = action[topk_idx]
             losses.append(loss[topk_idx[0]].item())
-            mu = topk_action.mean(dim=0, keepdim=True)
-            sigma = topk_action.std(dim=0, keepdim=True)
+            if self.action_pca is not None:
+                # Refit Gaussian in z-space (cheap; topk << num_samples).
+                topk_z = self._action_to_z(topk_action)
+                mu = topk_z.mean(dim=0, keepdim=True)
+                sigma = topk_z.std(dim=0, keepdim=True)
+            else:
+                mu = topk_action.mean(dim=0, keepdim=True)
+                sigma = topk_action.std(dim=0, keepdim=True)
             mu_history.append(mu.cpu().clone())
             sigma_history.append(sigma.cpu().clone())
             for k, v in {**log_dict, "avg_sigma": sigma.mean().item(), "step": i + 1}.items():
@@ -228,15 +297,17 @@ class CEMPlanner(BasePlanner):
             if self.wandb_run is not None:
                 self.wandb_run.log(log_dict, commit=False)
 
-            # Per-iteration mu evaluation: extra WM rollout on updated mu
+            # Per-iteration mu evaluation: extra WM rollout on updated mu.
+            # When PCA is active, project mu_z back to action space first.
+            mu_action = self._z_to_action(mu) if self.action_pca is not None else mu
             with torch.no_grad():
-                mu_state = self.wm.rollout(state_0=trans_obs_0, act=mu)
+                mu_state = self.wm.rollout(state_0=trans_obs_0, act=mu_action)
             mu_loss, _ = self.objective_fn(i, mu_state, trans_obs_0, z_obs_g, save_path=None, topk=0)
             mu_dreamsim = mu_loss[0].item()
 
             if self.evaluator is not None:
                 metrics, other_vals = self.evaluator.eval_mu_step(
-                    i, mu, mu_state, trans_obs_0, z_obs_g,
+                    i, mu_action, mu_state, trans_obs_0, z_obs_g,
                     fisheye_params=fisheye_params, R_C_pelvis=R_C_pelvis, t_C_pelvis=t_C_pelvis,
                     save_path=step_dir, render_skin=render_skin,
                 )
@@ -299,4 +370,7 @@ class CEMPlanner(BasePlanner):
             "sigma_history": torch.stack(sigma_history) if sigma_history else None,
         }, f"{self.log_dir}/{current_task_name}/results.pth")
 
+        # Always return action-space mu so callers see the same interface.
+        if self.action_pca is not None:
+            return self._z_to_action(mu)
         return mu

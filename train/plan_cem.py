@@ -31,7 +31,7 @@ from planning.plotting_fns import save_action_obs_sequence_viz
 from vint_train.training.nymeria_training_utils import set_gaussian_stats
 from train_ddp import init_distributed
 
-def build_peva_cem(args, wandb_run, log_dir, device):
+def build_peva_cem(args, wandb_run, log_dir, device, action_pca=None):
     policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device=device)
     model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device=device,
                                                                 inference_context_size=args.peva_context_size,
@@ -57,9 +57,36 @@ def build_peva_cem(args, wandb_run, log_dir, device):
         preprocessor=preprocessor,
         evaluator=evaluator,
         wandb_run=wandb_run,
-        log_dir=log_dir
+        log_dir=log_dir,
+        action_pca=action_pca,
     )
     return cem_planner, nomad_config, peva_config
+
+
+def _load_action_pca(path, K=None):
+    """Load a PCA basis saved by scripts/fit_action_pca.py.
+
+    If `K` is provided and smaller than the saved basis size, the top-K
+    components are sliced off (so a single basis fit at e.g. K=64 can be reused
+    for K∈{8, 16, 32, 64} planning runs without re-fitting).
+    """
+    pca = torch.load(path, map_location="cpu", weights_only=False)
+    saved_K = pca["components"].shape[0]
+    if K is None:
+        K = saved_K
+    assert K <= saved_K, f"--pca_K={K} exceeds saved basis K={saved_K}"
+    out = {
+        "components": pca["components"][:K].contiguous().float(),
+        "mean": pca["mean"].float(),
+        "explained_variance": pca["explained_variance"][:K].contiguous().float(),
+        "explained_variance_ratio": pca["explained_variance_ratio"][:K].contiguous().float(),
+        "horizon": pca["horizon"],
+        "action_dim": pca["action_dim"],
+        "K": K,
+    }
+    print(f"[PCA] loaded {path}: K={K}/{saved_K}, "
+          f"cum_var_ratio={float(out['explained_variance_ratio'].sum()):.4f}")
+    return out
 
 def build_waypoint_cem(args, wandb_run, log_dir, device):
     policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device=device)
@@ -122,6 +149,8 @@ def main(args):
     
     datetime_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     run_name = f"{algo}_cem-h{args.horizon}-n{args.num_samples}-t{args.topk}-v{args.var_scale}-o{args.opt_steps}-N{args.num_eval_samples}-ds{args.peva_diffusion_steps}-dist{args.min_dist_cat}-{args.max_dist_cat}"
+    if args.action_pca_path:
+        run_name = f"{run_name}-pcaK{args.pca_K if args.pca_K is not None else 'all'}"
     if args.use_leafxyz_as_cost:
         run_name = "CHEATMETRIC_leafxyz_as_cost" + run_name
     if world_size > 1:
@@ -142,6 +171,14 @@ def main(args):
     
     # load models
     device = 'cuda'
+
+    action_pca = None
+    if args.action_pca_path:
+        assert algo == "peva", f"--action_pca_path is only supported with --algo peva (got {algo})"
+        action_pca = _load_action_pca(args.action_pca_path, K=args.pca_K)
+        assert action_pca["horizon"] == args.horizon, \
+            f"PCA basis horizon={action_pca['horizon']} but --horizon={args.horizon}"
+
     if algo in "waypoint":
         action_init = torch.ones(1, args.horizon, 8) * 0.5
         cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir, device)
@@ -153,7 +190,7 @@ def main(args):
         cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir, device)
     elif algo == "peva":
         action_init = None
-        cem_planner, nomad_config, peva_config = build_peva_cem(args, wandb_run, log_dir, device)
+        cem_planner, nomad_config, peva_config = build_peva_cem(args, wandb_run, log_dir, device, action_pca=action_pca)
         
     # prepare dataset
     data_config = nomad_config["datasets"]["nymeria"]
@@ -395,6 +432,13 @@ if __name__ == "__main__":
     parser.add_argument("--nomad_config", type=str, default=None)
     parser.add_argument("--nomad_checkpoint", type=str, default=None)
     
+    parser.add_argument("--action_pca_path", type=str, default=None,
+                        help="Path to a .pt PCA basis (from scripts/fit_action_pca.py). "
+                             "If set, CEM samples in PCA latent z-space and projects to (H,48). PEVA + CEM only.")
+    parser.add_argument("--pca_K", type=int, default=None,
+                        help="If set, use only the top-K components from the loaded PCA basis. "
+                             "Must be <= the saved K. Lets one basis serve multiple K-sweeps.")
+
     parser.add_argument("--world_size", type=int, default=1, help="World size")
     parser.add_argument("--rank", type=int, default=0, help="Rank")
     
