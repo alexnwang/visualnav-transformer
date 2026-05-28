@@ -250,14 +250,18 @@ def main(rank, world_size, config):
                                                  down_dims=config["down_dims"],
                                                  cond_predict_scale=config["cond_predict_scale"],
                                                  goal_pose_dims=goal_pose_dim)
-        dist_pred_network = DenseNetwork(embedding_dim=config["encoding_size"])
+        if float(config.get("alpha", 0)) > 0:
+            dist_pred_network = DenseNetwork(embedding_dim=config["encoding_size"])
+        else:
+            dist_pred_network = None
         model = NoMaD(vision_encoder, noise_pred_net, dist_pred_network)
         noise_scheduler = DDPMScheduler(num_train_timesteps=config["num_diffusion_iters"], beta_schedule='squaredcos_cap_v2', clip_sample=True, prediction_type='epsilon')
         if rank == 0:
             print(f"Number of trainable parameters in model: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
             print(f"Number of trainable parameters in vision_encoder: {sum(p.numel() for p in vision_encoder.parameters() if p.requires_grad)}")
             print(f"Number of trainable parameters in noise_pred_net: {sum(p.numel() for p in noise_pred_net.parameters() if p.requires_grad)}")
-            print(f"Number of trainable parameters in dist_pred_network: {sum(p.numel() for p in dist_pred_network.parameters() if p.requires_grad)}")
+            if dist_pred_network is not None:
+                print(f"Number of trainable parameters in dist_pred_network: {sum(p.numel() for p in dist_pred_network.parameters() if p.requires_grad)}")
     elif config['model_type'] == 'regression':
         vision_encoder = get_vision_encoder()
         model = RegressionModel(vision_encoder, output_dim=config["input_dims"]) # comes from the diffusion model params

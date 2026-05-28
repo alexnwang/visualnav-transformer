@@ -9,22 +9,24 @@ import torch.nn as nn
 
 class NoMaD(nn.Module):
 
-    def __init__(self, vision_encoder, 
+    def __init__(self, vision_encoder,
                        noise_pred_net,
-                       dist_pred_net):
+                       dist_pred_net=None):
         super(NoMaD, self).__init__()
 
 
         self.vision_encoder = vision_encoder
         self.noise_pred_net = noise_pred_net
+        # If None, no submodule is registered, so DDP won't flag unused params.
         self.dist_pred_net = dist_pred_net
-    
+
     def forward(self, func_name, **kwargs):
         if func_name == "vision_encoder" :
             output = self.vision_encoder(kwargs["obs_img"], kwargs["goal_img"], input_goal_mask=kwargs["input_goal_mask"], context_poses=kwargs["context_poses"], goal_coordinates=kwargs["goal_coordinates"])
         elif func_name == "noise_pred_net":
             output = self.noise_pred_net(sample=kwargs["sample"], timestep=kwargs["timestep"], global_cond=kwargs["global_cond"], goal_pose=kwargs["goal_pose"])
         elif func_name == "dist_pred_net":
+            assert self.dist_pred_net is not None, "dist_pred_net not constructed (alpha=0?)"
             output = self.dist_pred_net(kwargs["obsgoal_cond"])
         else:
             raise NotImplementedError

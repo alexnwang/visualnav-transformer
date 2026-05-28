@@ -266,10 +266,13 @@ def train_nomad(
             goal_pose = goal_pos[:, 0]
 
         obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
-        # Predict distance
-        dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
-        dist_loss = nn.functional.mse_loss(dist_pred.squeeze(-1), distance)
-        dist_loss = (dist_loss * (1 - goal_mask.float())).mean() / (1e-2 +(1 - goal_mask.float()).mean())
+        # Predict distance (skipped when alpha=0: dist_pred_net not constructed)
+        if alpha != 0:
+            dist_pred = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
+            dist_loss = nn.functional.mse_loss(dist_pred.squeeze(-1), distance)
+            dist_loss = (dist_loss * (1 - goal_mask.float())).mean() / (1e-2 +(1 - goal_mask.float()).mean())
+        else:
+            dist_loss = torch.zeros((), device=device)
 
         # Sample noise to add to actions
         noise = torch.randn(naction.shape, device=device)
@@ -676,7 +679,10 @@ def model_output(
     obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
     
     obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask, context_poses=context_poses, goal_coordinates=goal_coordinates)
-    gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
+    if getattr(model, "dist_pred_net", None) is not None:
+        gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
+    else:
+        gc_distance = None
     obsgoal_cond = obsgoal_cond.repeat_interleave(num_samples, dim=0)
 
     # initialize action from Gaussian noise
