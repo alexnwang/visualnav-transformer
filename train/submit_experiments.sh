@@ -1,4 +1,13 @@
 #!/bin/bash
+# Nymeria + older experiments. EgoDex experiments live in submit_experiments_egodex.sh.
+
+# 05/19/2026 Long-run of the goaldraw+waypointMask baseline at 20 epochs on
+# 4xL40S. alpha=0 disables the distance head; train_ddp.py now skips
+# constructing dist_pred_network when alpha<=0 so DDP doesn't complain about
+# unused weights. Bench: ~1.83h/epoch train + ~20min/epoch eval on 4xL40S ->
+# 20 epochs ~43h, wall 48h. (Earlier 25-epoch attempt sized to training time
+# only would have spilled past the wall once eval was included.)
+SBATCH_TIME=48:00:00 ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-alpha0-20ep.yaml l40s4
 
 # 05/04/2026 goal_body_parts ablations on goaldraw-waypointMask baseline
 # ./submit_scripts/submit_torch.sh config/torch/minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask-bodyparts_pelvis.yaml 4

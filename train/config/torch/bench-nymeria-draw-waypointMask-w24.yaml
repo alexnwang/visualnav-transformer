@@ -1,0 +1,83 @@
+project_name: nomad-bench
+run_name: bench-nymeria-draw-waypointMask-w24
+
+# Benchmark-only: same recipe as
+# minimal-nomad-proprioception-cat8-dinov3_unpool_3dposemb-proj-lr5e-4-pool_curr_obs-goaldraw-waypointMask.yaml
+# but use_wandb=False and short, so we can scrape steady-state samples/s and
+# estimate 20/30-epoch wall on gl008 (L40S, 16 CPUs) and ga016 (A100, 24 CPUs).
+
+use_wandb: False
+train: True
+batch_size: 64
+epochs: 1
+gpu_ids: [0]
+num_workers: 24
+lr: 5e-4
+optimizer: adamw
+clipping: True
+max_norm: 1.
+scheduler: "cosine"
+warmup: True
+warmup_epochs: 1
+cyclic_period: 1
+plateau_patience: 3
+plateau_factor: 0.5
+seed: 0
+
+model_type: nomad
+goal_type: draw
+proprioception: True
+encoding_size: 384
+pool_features: False
+project_encoding: True
+pos_enc_3d: True
+pool_curr_obs: True
+vision_encoder: nomad_vint
+obs_encoder: dinov3-s
+mha_num_attention_heads: 4
+mha_num_attention_layers: 4
+mha_ff_dim_factor: 4
+down_dims: [256, 384, 512]
+attn_unet: False
+cond_predict_scale: False
+
+input_dims: 48
+num_diffusion_iters: 10
+
+goal_mask_prob: 0.0
+waypoint_masking: uniform
+
+normalize: True
+
+context_size: 3
+alpha: 1e-4
+
+distance:
+  min_dist_cat: 8
+  max_dist_cat: 8
+action:
+  min_dist_cat: 0
+  max_dist_cat: 20
+
+len_traj_pred: 8
+
+image_size: [224, 224]
+datasets:
+  nymeria:
+    data_folder: /scratch/anw2067/nymeria_visibility_matrix
+    train: data_splits/nymeria/train/
+    test: data_splits/nymeria/test/
+    action_stats:
+      min: [-2.5, -2.5, -2.5, -3.14159, -3.14159, -3.14159]
+      max: [1.5, 1.5, 1.5, 3.14159, 3.14159, 3.14159]
+    gaussian_normalization_stats_path: "nymeria_nomad_mean_var_stats.json"
+
+print_log_freq: 50
+image_log_freq: 0
+num_images_log: 0
+pairwise_test_freq: 0
+eval_fraction: 0.0
+wandb_log_freq: 0
+eval_freq: 0
+
+eval_batch_size: 128
