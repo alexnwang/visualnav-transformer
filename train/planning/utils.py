@@ -258,7 +258,15 @@ def load_policy(nomad_config_file, nomad_checkpoint, device='cpu'):
             loaded_state_dict[key.replace("module.", "")] = loaded_state_dict[key]
             del loaded_state_dict[key] # remove the module prefix
             
-    res = model.load_state_dict(loaded_state_dict, strict=True)
+    res = model.load_state_dict(loaded_state_dict, strict=False)
+    # alpha=0 models are trained without the distance head (dist_pred_net), which
+    # is unused at inference. Tolerate exactly those missing keys, but fail loudly
+    # on anything else.
+    missing = [k for k in res.missing_keys if not k.startswith("dist_pred_net")]
+    assert not missing and not res.unexpected_keys, (
+        f"state_dict mismatch beyond the distance head: "
+        f"missing={missing} unexpected={res.unexpected_keys}"
+    )
     print("model loaded with: ", res)
 
     with open(config['datasets']['nymeria']['gaussian_normalization_stats_path'], 'r') as f:
