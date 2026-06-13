@@ -25,6 +25,65 @@ SLURM_HEADER="#!/bin/bash
 # singularity exec --nv --overlay /scratch/anw2067/nymeria.sqf:ro /share/apps/images/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif bash -l -c "conda activate nomad_train2 && python plan_cem_viz.py -a waypoint -n 128 -o 16 -t 8 -v 0.5 -R 32 -H 1 --peva_diffusion_steps 250 --nomad_model draw_mask --num_samples_to_plan 64 --shuffle --min_dist_cat 8 --max_dist_cat 8"
 
 ########################################################
+# 2026-05-31, waypoint-CEM over the 5 curated "talk" tracks (talk5_final.pkl,
+# all dist8). Empirical waypoint init (dist8 GT leaf-waypoint mean) + tight
+# variance (-v 0.15) to suppress implausible conformations (e.g. pelvis above
+# head); -N 256 for a low-noise per-iteration metric to prioritize the best CEM
+# step. Otherwise matches the talk8 waypoint run (o8, n64, t8, H1, draw_mask).
+########################################################
+
+# waypoint-CEM, empirical init, tight variance, high-N eval
+sbatch --time=12:00:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=plan-waypoint_cem-talk5_final-o8-n64-t8-H1-v0.15-N256-ds64-empirical-dist8
+cd /home/anw2067/visualnav-transformer/train
+${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a waypoint -o 8 -H 1 -n 64 -t 8 -v 0.15 -N 256 --waypoint_init empirical --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 64 --min_dist_cat 8 --max_dist_cat 8 --tasks_file /home/anw2067/visualnav-transformer/train/data_splits/nymeria/test/viz_shortlists/talk5_final.pkl"
+EOF
+
+########################################################
+# 2026-05-30, aggressive plan over the 8 hand-picked "talk" tasks
+# (talk_8tasks.pkl, all dist8). CEM at 8 opt steps x 64 samples/iter, top-8
+# elites, draw_mask. Both planners over the SAME explicit task list (via the
+# new --tasks_file override, no --shuffle) so PEVA-CEM and waypoint-CEM are
+# directly comparable per task.
+########################################################
+
+# PEVA-CEM (peva action chunks, H=8)
+sbatch --time=8:00:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=plan-peva_cem-talk8-h8-n64-t8-v0.5-o8-N1-ds64-dist8
+cd /home/anw2067/visualnav-transformer/train
+${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a peva -o 8 -H 8 -n 64 -t 8 -v 0.5 -N 1 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 64 --min_dist_cat 8 --max_dist_cat 8 --tasks_file /home/anw2067/visualnav-transformer/train/data_splits/nymeria/test/viz_shortlists/talk_8tasks.pkl"
+EOF
+
+# waypoint-CEM (waypoint policy chunks, H=1)
+sbatch --time=4:00:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=plan-waypoint_cem-talk8-o8-n64-t8-H1-v0.3-N64-ds64-dist8
+cd /home/anw2067/visualnav-transformer/train
+${SING} bash -l -c "conda activate nomad_train2 && python plan_cem.py -a waypoint -o 8 -H 1 -n 64 -t 8 -v 0.3 -N 64 --peva_context_size 7 --peva_diffusion_steps 64 --nomad_model draw_mask --rank 0 --world_size 1 --num_samples_to_plan 64 --min_dist_cat 8 --max_dist_cat 8 --tasks_file /home/anw2067/visualnav-transformer/train/data_splits/nymeria/test/viz_shortlists/talk_8tasks.pkl"
+EOF
+
+########################################################
+# 2026-05-30, policy MJE distribution over 4 deduped (stride>=8) motion task
+# sets: hand (541, arm_max>=0.844) + balanced-hand (3360, loco[0.25,0.75] &
+# arm_max>=0.5); lateral (307, lat>=0.686 & latfrac>=0.74) + balanced-lateral
+# (5570, loco[0.25,0.75] & latfrac>=0.74 & lat>=0.3). draw_mask, best-of-64,
+# 8 dataloader workers, no per-task renders. CSV incl. stay-put init_mje
+# baseline; figure overlays best-of-N policy MJE (solid) vs stay-put baseline
+# (dashed) per set. ~9.8K tasks.
+########################################################
+
+mkdir -p /home/anw2067/slurm_logs/policy_mje && sbatch --time=4:00:00 <<EOF
+${SLURM_HEADER}
+#SBATCH --job-name=policy-mje-4sets-draw_mask-N64
+#SBATCH --output=/home/anw2067/slurm_logs/policy_mje/mje-%j.out
+#SBATCH --error=/home/anw2067/slurm_logs/policy_mje/mje-%j.err
+cd /home/anw2067/visualnav-transformer/train
+${SING} bash -l -c "conda activate nomad_train2 && python plan_policy_viz.py --nomad_model draw_mask --no_viz -N 64 --num_workers 8 --task_sets hand=/home/anw2067/visualnav-transformer/train/data_splits/nymeria/test/viz_shortlists/tasks_hand_dedup.pkl balanced-hand=/home/anw2067/visualnav-transformer/train/data_splits/nymeria/test/viz_shortlists/tasks_balanced_hand_dedup.pkl lateral=/home/anw2067/visualnav-transformer/train/data_splits/nymeria/test/viz_shortlists/tasks_lateral_dedup.pkl balanced-lateral=/home/anw2067/visualnav-transformer/train/data_splits/nymeria/test/viz_shortlists/tasks_balanced_lateral_dedup.pkl --mje_csv /home/anw2067/visualnav-transformer/train/data_splits/nymeria/test/viz_shortlists/mje_4sets_draw_mask_N64.csv --hist_out /home/anw2067/visualnav-transformer/train/data_splits/nymeria/test/viz_shortlists/mje_4sets_draw_mask_N64.png"
+EOF
+
+########################################################
 # 2026-05-09, retrieval baseline — build privileged KNN index over train, dist8, H=8
 ########################################################
 
