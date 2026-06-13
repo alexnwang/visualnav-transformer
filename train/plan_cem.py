@@ -31,6 +31,33 @@ from planning.plotting_fns import save_action_obs_sequence_viz
 from vint_train.training.nymeria_training_utils import set_gaussian_stats
 from train_ddp import init_distributed
 
+# Empirical mean of GT leaf waypoints [Pelvis, Head, R_Hand, L_Hand] x (x, y),
+# normalized [0,1] (y: 0=top), over 1200 dist8 test goals (visible joints only).
+# Used as the CEM init mean with --waypoint_init empirical (anatomy prior vs. the
+# default all-center 0.5, which lets CEM converge to implausible configs).
+WAYPOINT_INIT_MEAN = [0.5188, 0.6636, 0.5147, 0.4560, 0.5803, 0.6857, 0.4726, 0.7039]
+
+
+def build_action_init(algo, horizon, waypoint_init="center"):
+    """Initial CEM mean (mu) for the waypoint algos, or None for peva.
+
+    waypoint_init='center'    -> every waypoint at image-center (0.5, 0.5)
+    waypoint_init='empirical' -> WAYPOINT_INIT_MEAN per joint (keeps depth at 0.5
+                                 for waypoint_point3d).
+    """
+    if algo == "waypoint":
+        if waypoint_init == "empirical":
+            return torch.tensor(WAYPOINT_INIT_MEAN, dtype=torch.float32).reshape(1, 1, 8).repeat(1, horizon, 1)
+        return torch.ones(1, horizon, 8) * 0.5
+    if algo == "waypoint_point3d":
+        if waypoint_init == "empirical":
+            xy = torch.tensor(WAYPOINT_INIT_MEAN, dtype=torch.float32).reshape(1, 1, 4, 2).repeat(1, horizon, 1, 1)
+        else:
+            xy = torch.ones(1, horizon, 4, 2) * 0.5
+        depth = torch.ones(1, horizon, 4, 1) * 0.5
+        return torch.cat([xy, depth], dim=-1).flatten(2, 3)
+    return None  # peva
+
 def build_peva_cem(args, wandb_run, log_dir, device):
     policy, policy_diffusion, nomad_stats, nomad_config = load_policy(args.nomad_config, args.nomad_checkpoint, device=device)
     model, _, peva_diffusion, vae, peva_stats, peva_config = load_peva(args.peva_config, args.peva_checkpoint, device=device,
@@ -143,13 +170,10 @@ def main(args):
     # load models
     device = 'cuda'
     if algo in "waypoint":
-        action_init = torch.ones(1, args.horizon, 8) * 0.5
+        action_init = build_action_init("waypoint", args.horizon, args.waypoint_init)
         cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir, device)
     elif algo == "waypoint_point3d":
-        action_init = torch.cat([
-            torch.ones(1, args.horizon, 4, 2) * 0.5, # image coords
-            torch.ones(1, args.horizon, 4, 1) * 0.5 # depth coordinate
-        ], dim=-1).flatten(2,3)
+        action_init = build_action_init("waypoint_point3d", args.horizon, args.waypoint_init)
         cem_planner, nomad_config, peva_config = build_waypoint_cem(args, wandb_run, log_dir, device)
     elif algo == "peva":
         action_init = None
@@ -160,24 +184,28 @@ def main(args):
     if args.data_folder is not None:
         data_config["data_folder"] = args.data_folder
     context_size = max(args.peva_context_size - 1, nomad_config["context_size"])
-    tasks_file = build_planning_split(
-        data_folder=data_config["data_folder"],
-        traj_names_file=os.path.join(data_config["test"], "traj_names.txt"),
-        split_save_path=os.path.join(
-            data_config["test"],
-            f"planning_split_dist{args.min_dist_cat}-{args.max_dist_cat}"
-            f"_ctx{context_size}_thresh{args.min_dist_threshold}"
-            f"{'_keepnonvis' if args.keep_nonvisible_goal else ''}.pkl"
-        ),
-        context_size=context_size,
-        min_dist_cat=args.min_dist_cat,
-        max_dist_cat=args.max_dist_cat,
-        min_dist_threshold=args.min_dist_threshold,
-        keep_nonvisible_goal=args.keep_nonvisible_goal,
-        waypoint_spacing=data_config.get("waypoint_spacing", 1),
-        end_slack=data_config.get("end_slack", 0),
-        curr_time_stride=args.curr_time_stride,
-    )
+    if args.tasks_file is not None:
+        print(f"[plan_cem] Using explicit task list: {args.tasks_file}")
+        tasks_file = args.tasks_file
+    else:
+        tasks_file = build_planning_split(
+            data_folder=data_config["data_folder"],
+            traj_names_file=os.path.join(data_config["test"], "traj_names.txt"),
+            split_save_path=os.path.join(
+                data_config["test"],
+                f"planning_split_dist{args.min_dist_cat}-{args.max_dist_cat}"
+                f"_ctx{context_size}_thresh{args.min_dist_threshold}"
+                f"{'_keepnonvis' if args.keep_nonvisible_goal else ''}.pkl"
+            ),
+            context_size=context_size,
+            min_dist_cat=args.min_dist_cat,
+            max_dist_cat=args.max_dist_cat,
+            min_dist_threshold=args.min_dist_threshold,
+            keep_nonvisible_goal=args.keep_nonvisible_goal,
+            waypoint_spacing=data_config.get("waypoint_spacing", 1),
+            end_slack=data_config.get("end_slack", 0),
+            curr_time_stride=args.curr_time_stride,
+        )
     dataset = NymeriaPlanningDataset(
         tasks_file=tasks_file,
         data_folder=data_config["data_folder"],
@@ -364,6 +392,9 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num_samples", type=int, default=32, help="Number of samples")
     parser.add_argument("-t", "--topk", type=int, default=4, help="Top k samples")
     parser.add_argument("-v", "--var_scale", type=float, default=0.5, help="Variance scale")
+    parser.add_argument("--waypoint_init", type=str, choices=["center", "empirical"], default="center",
+                        help="CEM init mean for waypoint algos: 'center' (all 0.5) or 'empirical' "
+                             "(WAYPOINT_INIT_MEAN, the dist8 GT leaf-waypoint mean / anatomy prior)")
     parser.add_argument("-o", "--opt_steps", type=int, default=8, help="Optimization steps")
     parser.add_argument("-H", "--horizon", type=int, default=1, help="Time horizon")
     parser.add_argument("-N", "--num_eval_samples", type=int, default=1, help="Number of evaluation samples")
@@ -374,6 +405,7 @@ if __name__ == "__main__":
     parser.add_argument("--curr_time_stride", type=int, default=1, help="Stride when iterating start times during split building")
     parser.add_argument("--min_dist_threshold", type=float, default=0.1, help="Minimum distance threshold")
     parser.add_argument("--num_samples_to_plan", type=int, default=32, help="Number of samples to plan")
+    parser.add_argument("--tasks_file", type=str, default=None, help="Explicit planning task list pkl (list of {track,curr_time,goal_time}); bypasses build_planning_split")
     parser.add_argument("--skip_tasks", type=int, default=0, help="Skip the first N tasks before planning")
     parser.add_argument("--no_wandb", action="store_true", help="Don't use wandb")
     parser.add_argument("--no_skin", action="store_true", help="Skip skinned mesh renders (faster)")

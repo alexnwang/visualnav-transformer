@@ -27,7 +27,7 @@ from einops import repeat
 from torch.utils.data import DistributedSampler, DataLoader, Subset
 
 from peva.diffusion import create_diffusion
-from plan_cem import build_waypoint_cem, build_peva_cem, MODEL_DIRECTORY
+from plan_cem import build_waypoint_cem, build_peva_cem, build_action_init, MODEL_DIRECTORY
 from planning.cem import CEMPlanner, move_to_device
 from planning.nymeria_dataset import NymeriaPlanningDataset, build_planning_split, _LEAF_IDX
 from planning.wrappers import (
@@ -196,13 +196,10 @@ def main(args):
 
     # Build CEM planner (no wandb -- this is offline viz)
     if algo == "waypoint":
-        action_init = torch.ones(1, args.horizon, 8) * 0.5
+        action_init = build_action_init("waypoint", args.horizon, args.waypoint_init)
         cem_planner, nomad_config, peva_config = build_waypoint_cem(args, None, log_dir, device)
     elif algo == "waypoint_point3d":
-        action_init = torch.cat([
-            torch.ones(1, args.horizon, 4, 2) * 0.5,
-            torch.ones(1, args.horizon, 4, 1) * 0.5
-        ], dim=-1).flatten(2, 3)
+        action_init = build_action_init("waypoint_point3d", args.horizon, args.waypoint_init)
         cem_planner, nomad_config, peva_config = build_waypoint_cem(args, None, log_dir, device)
     elif algo == "peva":
         action_init = None
@@ -536,6 +533,8 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num_samples", type=int, default=128, help="CEM samples per iteration")
     parser.add_argument("-t", "--topk", type=int, default=8, help="CEM top-k elites")
     parser.add_argument("-v", "--var_scale", type=float, default=0.5, help="CEM initial variance")
+    parser.add_argument("--waypoint_init", type=str, choices=["center", "empirical"], default="center",
+                        help="CEM init mean for waypoint algos: 'center' (0.5) or 'empirical' (dist8 leaf-waypoint mean)")
     parser.add_argument("-o", "--opt_steps", type=int, default=16, help="CEM optimization steps")
     parser.add_argument("-H", "--horizon", type=int, default=1, help="Waypoint horizon")
     parser.add_argument("-N", "--num_eval_samples", type=int, default=1, help="Eval samples per CEM step")
