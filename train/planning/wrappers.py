@@ -68,7 +68,7 @@ def build_skeleton_top_seq(curr_obs_img, pred_deltas, first_pose, xsens_offsets,
                     pred_actions[:, t], R_C_pelvis, t_C_pelvis, fisheye_params,
                     xsens_offsets, image_size=image_size
                 )  # (1, 15, 2)
-                draw_skel_fn(draw, image_coords, show_text=show_text)
+                draw_skel_fn(draw, image_coords, show_text=show_text, scale=image_size / 224.0)
             skel_tensors.append(T_transforms.ToTensor()(img_pil))
         return torch.stack(skel_tensors).to(device)  # (T, 3, H, W)
     else:

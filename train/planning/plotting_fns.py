@@ -2,6 +2,19 @@ import os
 import torch
 from torchvision.utils import save_image
 
+
+def create_top_row(left_img, seq, right_img):
+    """Concatenate [left_img | seq[0] ... seq[T-1] | right_img] into (T+2, 3, H, W)."""
+    return torch.cat([left_img[None], seq, right_img[None]], dim=0)
+
+
+def save_stacked_top_rows(save_path, rows, ncols):
+    """Save a list of (ncols, 3, H, W) rows stacked vertically as one grid image."""
+    grid = torch.cat(rows, dim=0)
+    os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+    save_image(grid, save_path, nrow=ncols)
+
+
 def save_action_obs_sequence_viz(
     save_path: str,
     goal_image: torch.Tensor,
@@ -33,8 +46,6 @@ def save_action_obs_sequence_viz(
     """
     T = top_seq.shape[0]
     top_right = gt_goal_image if gt_goal_image is not None else torch.zeros_like(curr_obs)
-    top_row = torch.cat([goal_image[None], top_seq, top_right[None]], dim=0)   # (T+2, 3, H, W)
-    bot_row = torch.cat([curr_obs[None],   bot_seq, goal_obs[None]], dim=0)    # (T+2, 3, H, W)
-    grid = torch.cat([top_row, bot_row], dim=0)                                # (2*(T+2), 3, H, W)
-    os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
-    save_image(grid, save_path, nrow=T + 2)
+    top_row = create_top_row(goal_image, top_seq, top_right)   # (T+2, 3, H, W)
+    bot_row = create_top_row(curr_obs, bot_seq, goal_obs)      # (T+2, 3, H, W)
+    save_stacked_top_rows(save_path, [top_row, bot_row], T + 2)
