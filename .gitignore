@@ -15,6 +15,12 @@ outputs
 train/data_splits/**/*.pkl
 .claude
 
+# generated paper-figure outputs & shortlists
+train/paper_figure_generations/out/
+train/data_splits/nymeria/test/viz_shortlists/
+train/submit_scripts/logs/
+*.webp
+
 *.png
 *.jpg
 *.pth
