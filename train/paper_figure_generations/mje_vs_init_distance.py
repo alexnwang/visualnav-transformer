@@ -39,7 +39,7 @@ SHOW_SEM = True
 BUCKET_MODE = "quantile"  # "fixed" for evenly spaced, "quantile" for equal-count bins
 BUCKET_WIDTH = 0.5  # meters (used when BUCKET_MODE == "fixed")
 NUM_BUCKETS = 20     # (used when BUCKET_MODE == "quantile")
-OUTPUT_BASE = "train/logs/paper_vis/graphs/mje_vs_init_distance"
+OUTPUT_BASE = "train/logs/figures/paper/paper_vis/graphs/mje_vs_init_distance"
 
 # ============================================================
 

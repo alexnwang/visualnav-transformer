@@ -47,7 +47,7 @@ RUNS = {
 METRIC = "dreamsim"
 CUMULATIVE_MIN = False
 SHOW_SEM = False
-OUTPUT_BASE = "train/logs/paper_vis/graphs/dreamsim_vs_cem_iterations"
+OUTPUT_BASE = "train/logs/figures/paper/paper_vis/graphs/dreamsim_vs_cem_iterations"
 
 # ============================================================
 

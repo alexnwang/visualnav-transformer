@@ -279,7 +279,7 @@ def build_argparser():
                    default="/home/anw2067/visualnav-transformer/train/logs/cem/"
                            "2026_05_31_02_49_18:waypoint_cem-h1-n64-t8-v0.3-o8-N64-ds64-dist8-8",
                    help="finished plan_cem.py run (talk_8tasks); iter-1 mean = its results.pth mu_history[--solution_step]")
-    p.add_argument("--log_dir", default="/home/anw2067/visualnav-transformer/train/logs/talk_planning_example")
+    p.add_argument("--log_dir", default="/home/anw2067/visualnav-transformer/train/logs/figures/talk_highres/talk_planning_example")
     p.add_argument("--run_tag", default="",
                    help="optional subdir under {log_dir}/{task_name}/ to isolate this run's outputs")
     p.add_argument("--highres_frame", default=None, help="explicit high-res curr png (overrides derived path)")

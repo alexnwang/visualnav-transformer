@@ -147,7 +147,7 @@ if __name__ == "__main__":
     p.add_argument("--curr_time", type=int, required=True)
     p.add_argument("--goal_time", type=int, required=True)
     p.add_argument("--highres_frame", required=True, help="path to extracted 1408 curr_obs png")
-    p.add_argument("--log_dir", default="/home/anw2067/visualnav-transformer/train/logs/task_figure_viz_hr")
+    p.add_argument("--log_dir", default="/home/anw2067/visualnav-transformer/train/logs/figures/talk_highres/task_figure_viz_hr")
     p.add_argument("--nomad_model", default="draw_mask", choices=list(MODEL_DIRECTORY.keys()))
     p.add_argument("--nomad_config", default=None)
     p.add_argument("--nomad_checkpoint", default=None)

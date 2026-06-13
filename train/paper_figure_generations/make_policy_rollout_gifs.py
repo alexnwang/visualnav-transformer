@@ -130,12 +130,12 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("run_dir", type=str,
                    help="Path to a single run dir under policy_rollouts/, e.g. "
-                        "logs/paper_vis/policy_rollouts/2026_04_26_23_01_33:...")
+                        "logs/figures/paper/paper_vis/policy_rollouts/2026_04_26_23_01_33:...")
     p.add_argument("--fps", type=float, default=3.0)
     p.add_argument("--hold_first_last_ms", type=int, default=0,
                    help="Optional extra hold (ms) on first and last frames.")
     p.add_argument("--out_root", type=str,
-                   default="/home/anw2067/visualnav-transformer/train/logs/paper_vis/policy_rollouts_gifs")
+                   default="/home/anw2067/visualnav-transformer/train/logs/figures/paper/paper_vis/policy_rollouts_gifs")
     args = p.parse_args()
 
     run_dir = os.path.abspath(args.run_dir.rstrip("/"))

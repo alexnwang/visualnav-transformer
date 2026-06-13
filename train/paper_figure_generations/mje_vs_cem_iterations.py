@@ -55,7 +55,7 @@ RUNS = {
 METRIC = "all_xyz"
 CUMULATIVE_MIN = True  # If True, each step's value is min(step_0, ..., step_i) per task
 SHOW_SEM = True
-OUTPUT_BASE = "train/logs/paper_vis/graphs/mje_vs_cem_iterations"
+OUTPUT_BASE = "train/logs/figures/paper/paper_vis/graphs/mje_vs_cem_iterations"
 
 # ============================================================
 

@@ -38,7 +38,7 @@ from planning.vis_utils import *
 
 from torchvision.utils import save_image
 
-OUTPUT_DIR = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/teaser3"
+OUTPUT_DIR = "/home/anw2067/visualnav-transformer/train/logs/figures/paper/paper_vis/teaser3"
 DATA_SAVE_DIR = "/home/anw2067/scratch/nymeria_camera_dir"
 DATA_JSON="/home/anw2067/visualnav-transformer/data_jsons/visibility_no_data.json"
 

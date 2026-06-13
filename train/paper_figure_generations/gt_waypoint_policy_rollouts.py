@@ -9,7 +9,7 @@ For each planning task:
     as well as the ground-truth action sequence, for side-by-side comparison
 
 Outputs:
-  logs/paper_vis/policy_rollouts/<datetime>:<run_name>/<task_idx_name>/
+  logs/figures/paper/paper_vis/policy_rollouts/<datetime>:<run_name>/<task_idx_name>/
     context_frames.png          context stack (raw)
     goal_obs.png                GT goal observation
     goal_image_waypoints.png    curr obs with GT waypoints overlaid (policy input)
@@ -76,7 +76,7 @@ MODEL_DIRECTORY = {
     ),
 }
 
-OUTPUT_ROOT = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/policy_rollouts"
+OUTPUT_ROOT = "/home/anw2067/visualnav-transformer/train/logs/figures/paper/paper_vis/policy_rollouts"
 
 
 def main(args):

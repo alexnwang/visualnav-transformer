@@ -168,7 +168,7 @@ def main():
     p.add_argument("--which", choices=("best_wp", "best_mje", "both"), default="both",
                    help="Which planner rollout subdir(s) to pull from.")
     p.add_argument("--out_root", type=str,
-                   default="/home/anw2067/visualnav-transformer/train/logs/paper_vis/cem_viz_gifs")
+                   default="/home/anw2067/visualnav-transformer/train/logs/figures/paper/paper_vis/cem_viz_gifs")
     args = p.parse_args()
 
     for run_dir in args.run_dirs:

@@ -24,7 +24,7 @@ from planning.cem import CEMPlanner
 from planning.sampling import waypoint_sample
 from planning.vis_utils import *
 
-OUTPUT_DIR = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/plan_and_vis"
+OUTPUT_DIR = "/home/anw2067/visualnav-transformer/train/logs/figures/paper/paper_vis/plan_and_vis"
 DATA_SAVE_DIR = "/home/anw2067/scratch/nymeria_camera_dir"
 DATA_JSON = "/home/anw2067/visualnav-transformer/data_jsons/visibility_no_data.json"
 

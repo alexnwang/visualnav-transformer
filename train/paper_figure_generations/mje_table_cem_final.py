@@ -10,7 +10,7 @@ from mje_vs_cem_iterations import (
 )
 
 METRICS = ["intermediate_xyz", "leaf_xyz", "all_xyz"]
-OUTPUT_CSV = "train/logs/paper_vis/tables/mje_table_cem_final.csv"
+OUTPUT_CSV = "train/logs/figures/paper/paper_vis/tables/mje_table_cem_final.csv"
 
 
 def cummin_final_means(run_dirs, metrics):

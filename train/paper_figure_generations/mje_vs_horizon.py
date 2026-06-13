@@ -37,7 +37,7 @@ RUNS = {
 METRIC = "all_xyz"
 CUMULATIVE_MIN = False  # If True, take best value across all CEM steps per task
 SHOW_SEM = True
-OUTPUT_BASE = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/graphs/mje_vs_horizon"
+OUTPUT_BASE = "/home/anw2067/visualnav-transformer/train/logs/figures/paper/paper_vis/graphs/mje_vs_horizon"
 
 # ============================================================
 

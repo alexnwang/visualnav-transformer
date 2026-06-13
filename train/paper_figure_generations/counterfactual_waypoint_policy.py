@@ -19,7 +19,7 @@ For each planning task we:
       - save as {num_visible}-{wp_idx}-stacked_actions.png
 
 Outputs:
-  logs/paper_vis/counterfactuals/<datetime>:<run_name>/<task_name>/
+  logs/figures/paper/paper_vis/counterfactuals/<datetime>:<run_name>/<task_name>/
     context_and_goal.png
     {num_visible}-{wp_idx}-stacked_actions.png  (one per counterfactual)
 """
@@ -57,7 +57,7 @@ MODEL_DIRECTORY = {
     ),
 }
 
-OUTPUT_ROOT = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/counterfactuals"
+OUTPUT_ROOT = "/home/anw2067/visualnav-transformer/train/logs/figures/paper/paper_vis/counterfactuals"
 
 
 def _episode_passes_filter(goal_image_coords, first_pose, deltas, xsens_offsets,

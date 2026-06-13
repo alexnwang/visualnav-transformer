@@ -65,7 +65,7 @@ MODEL_DIRECTORY = {
     ),
 }
 
-OUTPUT_ROOT = "/home/anw2067/visualnav-transformer/train/logs/paper_vis/fig2_waypoint_projection"
+OUTPUT_ROOT = "/home/anw2067/visualnav-transformer/train/logs/figures/paper/paper_vis/fig2_waypoint_projection"
 
 # Pelvis/Head/R_Hand/L_Hand — match draw_waypoints' color_order exactly
 # (PIL named "red"/"green"/"blue"/"yellow") so 3D leaf markers and 2D

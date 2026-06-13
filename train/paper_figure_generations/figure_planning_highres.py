@@ -311,7 +311,7 @@ def build_argparser():
     p.add_argument("--highres_frames_dir",
                    default="/home/anw2067/visualnav-transformer/train/logs/highres_frames",
                    help="dir of {track}/{idx}.png high-res frames; used to derive curr/goal frames per task")
-    p.add_argument("--log_dir", default="/home/anw2067/visualnav-transformer/train/logs/planning_figure_hr")
+    p.add_argument("--log_dir", default="/home/anw2067/visualnav-transformer/train/logs/figures/talk_highres/planning_figure_hr")
     p.add_argument("--source_log_dir", default=None,
                    help="finished plan_cem.py logs/cem/... dir; loads saved mu_history and SKIPS the CEM search")
 
